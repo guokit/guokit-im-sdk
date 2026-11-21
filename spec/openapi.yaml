@@ -1,0 +1,1184 @@
+openapi: 3.1.0
+info:
+  title: IM 接入接口规范
+  version: 1.0.0
+  description: |
+    IM 服务的 HTTP 接口规范，与《IM 接入文档》配套，字段与错误码以服务端实现为准。
+
+    - 服务端接口（`/api/im/v1/server/*`）由接入方**后端**调用，鉴权用请求头 `X-Api-Key`。
+    - 客户端接口（`/api/im/v1/*`）与客服接口（`/api/imcs/v1/*`）由 App / Web 调用，鉴权用 `Authorization: Bearer <用户令牌>`。
+    - 响应包统一为 `{"code", "message", "data"}`：**成功时 `code` 是整数 `0`；失败时 `code` 是字符串错误码**，`data` 为 `{}`。
+      部分业务失败（如 `IM_USER_NOT_FOUND`、`IM_BLOCKED`、`IM_RATE_LIMITED`）走 **HTTP 200 + 业务码**，判断成功请严格比较 `code === 0`。
+    - 时间均为 `YYYY-MM-DD HH:mm:ss` 字符串，时区固定 Asia/Shanghai（UTC+8）。各种 id、seq 均为整数，user_id 为字符串。
+    - 全部接口还受站点授权校验：授权异常时回 HTTP 403 + `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN`。
+
+    长连接（WebSocket，Centrifuge 协议）不在本规范内，地址、鉴权、断开码见接入文档 §6；
+    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`。
+servers:
+  - url: https://im.example.com
+    description: 示例地址，换成你的 IM 服务域名
+tags:
+  - name: 服务端
+    description: 接入方后端调用，`X-Api-Key` 鉴权。每个接入应用另有调用频率上限，超出回 HTTP 200 + `IM_RATE_LIMITED`。
+  - name: 客户端
+    description: App / Web 调用，用户令牌鉴权。令牌失效统一回 401 `IM_TOKEN_INVALID`。
+  - name: 客服
+    description: 站点装了客服模块时可用，用户令牌鉴权，路径前缀是 `/api/imcs/v1`。
+
+paths:
+  # ---------------- 服务端接口 ----------------
+  /api/im/v1/server/ping:
+    get:
+      tags: [服务端]
+      operationId: serverPing
+      summary: 连通与 Key 自检
+      security: [{ ApiKey: [] }]
+      responses:
+        '200':
+          description: 成功返回当前接入应用；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [app_id, name]
+                            properties:
+                              app_id: { type: integer, format: int64, description: 接入应用 id }
+                              name: { type: string, description: 接入应用名称 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+
+  /api/im/v1/server/users/batch:
+    post:
+      tags: [服务端]
+      operationId: serverBatchUsers
+      summary: 批量导入用户
+      description: 每批 1–100 个，任一项不合法则整批拒绝（`message` 指出第几个），同一事务写入。已存在的用户只覆盖昵称与头像。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [users]
+              properties:
+                users:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/UserInput' }
+      responses:
+        '200':
+          description: 成功返回写入条数；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [count]
+                            properties:
+                              count: { type: integer, description: 本批用户数 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    put:
+      tags: [服务端]
+      operationId: serverPutUser
+      summary: 导入或更新单个用户
+      description: 用户已存在时只覆盖昵称与头像（传空串即清空），不改封禁状态、不影响已签令牌。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string, maxLength: 64, description: 昵称，可空，≤64 字 }
+                avatar_url: { type: string, maxLength: 512, description: 头像，可空，http(s) 链接且 ≤512 字符 }
+      responses:
+        '200':
+          description: 成功返回 user_id；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/UserIdData' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [服务端]
+      operationId: serverPatchUser
+      summary: 封禁 / 解封用户
+      description: 封禁使该用户全部已签令牌立即失效并断开所有长连接；解封不恢复旧令牌，需重新签发。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: integer
+                  enum: [0, 1]
+                  description: 0 封禁、1 正常
+      responses:
+        '200':
+          description: 成功返回 user_id 与新状态；用户不存在为 `IM_USER_NOT_FOUND`，调用超频为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [user_id, status]
+                            properties:
+                              user_id: { type: string }
+                              status: { type: integer, enum: [0, 1] }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/token:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    post:
+      tags: [服务端]
+      operationId: serverIssueToken
+      summary: 签用户令牌
+      description: |
+        无请求体。每次调用签一个新令牌，之前签的令牌照样有效直到过期；要让旧令牌全部作废请用踢下线。
+        令牌是不透明字符串，客户端不要解析，以 `expires_at` 判断何时续签。有效期默认 168 小时，站点可配 1–8760 小时。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200':
+          description: 成功返回令牌；用户不存在为 `IM_USER_NOT_FOUND`，已封禁为 `IM_USER_DISABLED`，调用超频为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [token, expires_at]
+                            properties:
+                              token: { type: string, description: 用户令牌（不透明字符串） }
+                              expires_at: { $ref: '#/components/schemas/DateTime' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/kick:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    post:
+      tags: [服务端]
+      operationId: serverKickUser
+      summary: 踢下线
+      description: 无请求体。使该用户全部已签令牌失效并断开长连接，但用户仍正常、可重新签令牌。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200':
+          description: 成功返回 user_id；用户不存在为 `IM_USER_NOT_FOUND`，调用超频为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/UserIdData' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/blocks:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      tags: [服务端]
+      operationId: serverListBlocks
+      summary: 黑名单列表
+      description: '`{user_id}` 是拉黑方。按拉黑时间倒序（同一秒按被拉黑方倒序），offset/limit 分页。拉黑方只校验格式，不要求已导入。'
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BlockOffset'
+        - $ref: '#/components/parameters/BlockLimit'
+      responses:
+        '200':
+          description: 成功返回本页；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/BlockPage' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/blocks/{target}:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      - $ref: '#/components/parameters/TargetPath'
+    put:
+      tags: [服务端]
+      operationId: serverAddBlock
+      summary: 拉黑
+      description: |
+        `{user_id}` 拉黑 `{target}`：此后 target 发给 user_id 的消息回 `IM_BLOCKED`；user_id 发给 target 不受影响。
+        双方只校验格式、不要求已导入；不能拉黑自己、不能拉黑 `@cs`（均为 400 `VALIDATION`）。
+        幂等：重复拉黑不报错、不改拉黑时间。不推送事件、不触发回调。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmptyOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [服务端]
+      operationId: serverRemoveBlock
+      summary: 解除拉黑
+      description: 幂等：没有这条记录也返回成功。校验规则同拉黑。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmptyOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/messages:
+    post:
+      tags: [服务端]
+      operationId: serverSendMessage
+      summary: 以某用户身份代发消息
+      description: |
+        与客户端发消息走完全相同的流程（校验、幂等、黑名单、限速按 `from` 计、发送前回调、推送、发送后回调）。
+        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式。`from` 或 `to` 为 `@cs` 时一律回 `IM_USER_NOT_FOUND`。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServerSendMessageRequest' }
+      responses:
+        '200':
+          description: |
+            成功返回消息对象（幂等重放时返回第一次的那条）。业务失败（HTTP 200）：
+            `IM_USER_NOT_FOUND`（收发方不存在，或涉及 `@cs`）、`IM_USER_DISABLED`、`IM_BLOCKED`（收件人已拉黑 from）、
+            `IM_RATE_LIMITED`（接入应用或发送者超频）、`IM_MESSAGE_REJECTED`（被发送前回调拒绝）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/Message' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/conversations/{id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    get:
+      tags: [服务端]
+      operationId: serverListMessages
+      summary: 查会话历史（审计）
+      description: 参数与客户端拉消息相同，不校验成员身份。会话不存在回 404 `VALIDATION`。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/AfterSeq'
+        - $ref: '#/components/parameters/BeforeSeq'
+        - $ref: '#/components/parameters/MessageLimit'
+      responses:
+        '200':
+          description: 成功返回本页消息（按 seq 升序）；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/MessagePage' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # ---------------- 客户端接口 ----------------
+  /api/im/v1/me:
+    get:
+      tags: [客户端]
+      operationId: getMe
+      summary: 当前用户（令牌自检）
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回当前用户资料。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/messages:
+    post:
+      tags: [客户端]
+      operationId: sendMessage
+      summary: 发消息
+      description: |
+        `from` 取令牌里的用户。`to` 填 `@cs` 即发给平台客服（站点装了客服模块时）。
+        同一发送者的 `client_msg_id` 全局唯一，重复提交直接返回第一次的那条消息（不再推送、不再回调）。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendMessageRequest' }
+      responses:
+        '200':
+          description: |
+            成功返回消息对象。业务失败（HTTP 200）：`IM_USER_NOT_FOUND`（接收方不存在）、`IM_USER_DISABLED`、
+            `IM_BLOCKED`（接收方已把你拉黑）、`IM_RATE_LIMITED`（10 秒 20 条）、`IM_MESSAGE_REJECTED`（被发送前回调拒绝）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/Message' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/upload:
+    post:
+      tags: [客户端]
+      operationId: uploadImage
+      summary: 上传图片
+      description: 只收 JPEG / PNG / GIF / WebP（按文件内容识别），大小上限取站点「图片上限」设置（默认 8MB）。与发消息同口径单独限速（10 秒 20 次）。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 图片文件
+      responses:
+        '200':
+          description: 成功返回附件 id、临时预览链接与上传凭证；超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/UploadResult' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations:
+    get:
+      tags: [客户端]
+      operationId: listConversations
+      summary: 会话列表（游标分页）
+      description: 只列出有过消息的会话，按最后一条消息时间倒序，单聊与客服会话混排。
+      security: [{ UserToken: [] }]
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: 首页不传，之后传上一页返回的 `next_cursor`
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: 默认 20，最大 50（超出按 50）
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: 成功返回本页会话。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Conversation' }
+                          next_cursor:
+                            type: string
+                            description: 下一页游标；空串表示没有下一页
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/unread:
+    get:
+      tags: [客户端]
+      operationId: getUnread
+      summary: 总未读
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回所有会话未读之和。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [total]
+                        properties:
+                          total: { type: integer, format: int64, description: 总未读数 }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/{id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    get:
+      tags: [客户端]
+      operationId: listMessages
+      summary: 补拉 / 翻历史
+      description: |
+        `after_seq` 补拉（返回 seq > after_seq）、`before_seq` 翻历史（返回 seq < before_seq），都不传为最新一页，两者只能传一个。
+        items 一律按 seq 升序。不是会话成员（或会话不存在）回 403 `FORBIDDEN`。
+      security: [{ UserToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/AfterSeq'
+        - $ref: '#/components/parameters/BeforeSeq'
+        - $ref: '#/components/parameters/MessageLimit'
+      responses:
+        '200':
+          description: 成功返回本页消息。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessagePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/read-all:
+    post:
+      tags: [客户端]
+      operationId: markAllRead
+      summary: 一键清全部未读
+      description: |
+        无请求体。把该用户所有会话（含客服会话）的已读位置推到各自最新一条。
+        `updated > 0` 时向本人频道推一条 `read_all` 事件（见 `PushReadAll`），不逐会话推 `read`。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回本次实际变更的会话数（没有未读时为 0）。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [updated]
+                        properties:
+                          updated: { type: integer, format: int64, description: 本次变更的会话数 }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/{id}/read:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    post:
+      tags: [客户端]
+      operationId: markRead
+      summary: 标已读
+      description: 已读位置只进不退，超过会话最大 seq 时按最大 seq 处理。成功后向本人所有在线设备推 `read` 事件（见 `PushRead`）。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seq]
+              properties:
+                seq: { type: integer, format: int64, minimum: 0, description: 通常传当前看到的最大 seq }
+      responses:
+        '200':
+          description: 成功返回新的已读位置与该会话剩余未读。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [read_seq, unread]
+                        properties:
+                          read_seq: { type: integer, format: int64 }
+                          unread: { type: integer, format: int64 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/blocks:
+    get:
+      tags: [客户端]
+      operationId: listBlocks
+      summary: 我的黑名单列表
+      description: 拉黑方是令牌里的用户。按拉黑时间倒序，offset/limit 分页。
+      security: [{ UserToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BlockOffset'
+        - $ref: '#/components/parameters/BlockLimit'
+      responses:
+        '200':
+          description: 成功返回本页。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BlockPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/blocks/{target}:
+    parameters:
+      - $ref: '#/components/parameters/TargetPath'
+    put:
+      tags: [客户端]
+      operationId: addBlock
+      summary: 拉黑
+      description: 令牌用户拉黑 `{target}`，语义同服务端拉黑。`target` 不合法、是自己或是 `@cs` 回 400 `VALIDATION`。幂等。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmpty' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [客户端]
+      operationId: removeBlock
+      summary: 解除拉黑
+      description: 幂等：没有这条记录也返回成功。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmpty' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # ---------------- 客服接口 ----------------
+  /api/imcs/v1/state:
+    get:
+      tags: [客服]
+      operationId: csGetState
+      summary: 当前接待状态
+      description: 用于客服会话页顶部的状态条。服务端不推送状态变化，进入客服会话、收到 `@cs` 新消息时刷新即可。站点客服不可用时回 400 `VALIDATION`。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回接待状态。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [status, session_id, queue_position]
+                        properties:
+                          status:
+                            type: string
+                            enum: [none, queued, active]
+                            description: none 当前没有进行中的咨询；queued 排队中；active 坐席接待中
+                          session_id:
+                            type: integer
+                            format: int64
+                            description: 当前这次接待的 id；none 时为 0
+                          queue_position:
+                            type: integer
+                            format: int64
+                            description: 排队名次（含自己，排第一为 1）；非 queued 时为 0
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/sessions/{id}/rating:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: 接待 id，取评价邀请消息的 `content.data.session_id`
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      tags: [客服]
+      operationId: csRateSession
+      summary: 评价一次接待
+      description: |
+        每次接待只能评一次，只能评自己的、已结束的接待。重复评价、评别人的或未结束的回 400 `VALIDATION`（`message` 为「无法评价」），
+        评分越界、评语超长同样回 400 `VALIDATION`。站点客服不可用时也回 400 `VALIDATION`。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: integer, minimum: 1, maximum: 5, description: 评分 1–5 }
+                comment: { type: string, maxLength: 200, description: 评语，可选，≤200 字 }
+      responses:
+        '200':
+          description: 成功返回被评价的接待 id。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [id]
+                        properties:
+                          id: { type: integer, format: int64, description: 接待 id }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: 接入应用的 API Key（形如 `imk_…`），只放在接入方后端，不要下发到客户端。
+    UserToken:
+      type: http
+      scheme: bearer
+      description: '接入方后端调「签用户令牌」拿到的用户令牌，放在 `Authorization: Bearer <令牌>`。'
+
+  parameters:
+    UserIdPath:
+      name: user_id
+      in: path
+      required: true
+      description: 用户 id，限 `[A-Za-z0-9_-]{1,64}`
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+    TargetPath:
+      name: target
+      in: path
+      required: true
+      description: 被拉黑方 user_id，限 `[A-Za-z0-9_-]{1,64}`（所以 `@cs` 不合法）
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+    ConversationIdPath:
+      name: id
+      in: path
+      required: true
+      description: 会话 id（conversation_id）
+      schema: { type: integer, format: int64 }
+    AfterSeq:
+      name: after_seq
+      in: query
+      required: false
+      description: 补拉：返回 seq > after_seq 的消息；与 before_seq 只能传一个
+      schema: { type: integer, format: int64, minimum: 0 }
+    BeforeSeq:
+      name: before_seq
+      in: query
+      required: false
+      description: 翻历史：返回 seq < before_seq 的消息；与 after_seq 只能传一个
+      schema: { type: integer, format: int64, minimum: 0 }
+    MessageLimit:
+      name: limit
+      in: query
+      required: false
+      description: 默认 30，最大 100（超出按 100）
+      schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+    BlockOffset:
+      name: offset
+      in: query
+      required: false
+      description: 跳过的条数，默认 0；`has_more` 为 true 时加上本页条数取下一页
+      schema: { type: integer, minimum: 0, default: 0 }
+    BlockLimit:
+      name: limit
+      in: query
+      required: false
+      description: 默认 50，最大 200（超出按 200）
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+
+  responses:
+    OkEmpty:
+      description: 成功，`data` 为 `{}`。
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/OkEnvelope'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/EmptyObject' }
+    OkEmptyOrRateLimited:
+      description: 成功时 `data` 为 `{}`；接入应用调用超频时为 `IM_RATE_LIMITED`。
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EmptyObject' }
+              - $ref: '#/components/schemas/ErrorEnvelope'
+    BadRequest:
+      description: '`VALIDATION`：参数不合法，`message` 说明原因。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    KeyInvalid:
+      description: '`IM_KEY_INVALID`：`X-Api-Key` 缺失、错误，或接入应用已停用。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    TokenInvalid:
+      description: '`IM_TOKEN_INVALID`：用户令牌缺失、验签失败、已过期，或用户已被封禁 / 踢下线，向接入方后端换新令牌后重试。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    LicenseError:
+      description: '`LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN`：IM 站点授权异常，联系 IM 服务提供方。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ForbiddenOrLicense:
+      description: '`FORBIDDEN`：不是该会话成员（或会话不存在）；或 `LICENSE_*`：站点授权异常。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: '`VALIDATION`：会话不存在（HTTP 404）。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Internal:
+      description: '`INTERNAL`：服务端错误（含令牌校验时数据库暂时不可用），可稍后重试；不要当成令牌失效处理。'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    DateTime:
+      type: string
+      pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+      description: Asia/Shanghai 时间，`YYYY-MM-DD HH:mm:ss`
+      examples: ['2026-11-20 10:00:00']
+
+    EmptyObject:
+      type: object
+      maxProperties: 0
+      description: 空对象 `{}`
+
+    OkEnvelope:
+      type: object
+      description: 成功响应包。`code` 恒为整数 0，`data` 的形状见各接口。
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+          const: 0
+        message:
+          type: string
+          const: ok
+        data:
+          type: object
+
+    ErrorCode:
+      type: string
+      description: |
+        失败响应的业务码（字符串）。HTTP 状态与业务码的对应：
+        - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）
+        - `IM_KEY_INVALID`：401
+        - `IM_TOKEN_INVALID`：401
+        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`：200
+        - `FORBIDDEN`：403 不是会话成员
+        - `LICENSE_INVALID`、`LICENSE_EXPIRED`、`LICENSE_DOMAIN`：403 站点授权异常
+        - `INTERNAL`：500
+      enum:
+        - VALIDATION
+        - IM_KEY_INVALID
+        - IM_TOKEN_INVALID
+        - IM_USER_NOT_FOUND
+        - IM_USER_DISABLED
+        - IM_MESSAGE_REJECTED
+        - IM_RATE_LIMITED
+        - IM_BLOCKED
+        - FORBIDDEN
+        - INTERNAL
+        - LICENSE_INVALID
+        - LICENSE_EXPIRED
+        - LICENSE_DOMAIN
+
+    ErrorEnvelope:
+      type: object
+      description: 失败响应包。`code` 为字符串错误码，`message` 为中文说明，`data` 恒为 `{}`。
+      required: [code, message, data]
+      properties:
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        message:
+          type: string
+          description: 中文说明。`IM_MESSAGE_REJECTED` 形如「消息被拒绝：<原因>」，`IM_BLOCKED` 为「对方已将你拉黑」。
+        data: { $ref: '#/components/schemas/EmptyObject' }
+
+    UserInput:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        nickname: { type: string, maxLength: 64, description: 可空，≤64 字 }
+        avatar_url: { type: string, maxLength: 512, description: 可空，http(s) 且 ≤512 字符 }
+
+    UserIdData:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string }
+
+    User:
+      type: object
+      required: [user_id, nickname, avatar_url]
+      properties:
+        user_id: { type: string, description: 用户 id；平台客服为 `@cs` }
+        nickname: { type: string, description: 昵称，可能为空串 }
+        avatar_url: { type: string, description: 头像链接，可能为空串 }
+
+    UploadResult:
+      type: object
+      required: [attachment_id, url, ticket]
+      properties:
+        attachment_id: { type: integer, format: int64, description: 附件 id，发图片消息时带上 }
+        url: { type: string, description: 临时链接，仅供本地预览 }
+        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片消息时带上 }
+
+    BlockItem:
+      type: object
+      required: [user_id, created_at]
+      properties:
+        user_id: { type: string, description: 被拉黑方 user_id（不带昵称头像，请用自己的用户资料展示） }
+        created_at: { $ref: '#/components/schemas/DateTime' }
+
+    BlockPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/BlockItem' }
+        has_more: { type: boolean, description: 是否还有下一页 }
+
+    # ---- 消息内容 ----
+    TextContent:
+      type: object
+      title: text
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 5000, description: 1–5000 字，不能全是空白 }
+
+    ImageUploadContent:
+      type: object
+      title: image（上传图，发送时）
+      description: 发送上传图时的形态；`attachment_id` 与 `ticket` 来自上传接口，且必须是发送者本人上传的。
+      required: [attachment_id, ticket, width, height]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        ticket: { type: string }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+
+    ImageAttachmentContent:
+      type: object
+      title: image（上传图，读取时）
+      description: 读取到的上传图形态；`url` 是每次读取时现签的临时链接（约 24 小时有效），不要长期保存。
+      required: [attachment_id, width, height, url]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+        url: { type: string, description: 现签临时链接；签名失败时为空串 }
+
+    ImageUrlContent:
+      type: object
+      title: image（外链图）
+      description: 外链图，发送与读取形态相同，原样存取。与 attachment_id 二选一。
+      required: [url, width, height]
+      not: { required: [attachment_id] }
+      properties:
+        url: { type: string, maxLength: 1024, description: https 链接，≤1024 字符 }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+
+    LocationContent:
+      type: object
+      title: location
+      required: [lat, lng]
+      properties:
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lng: { type: number, minimum: -180, maximum: 180 }
+        name: { type: string, maxLength: 100, description: 地点名，≤100 字 }
+        address: { type: string, maxLength: 200, description: 地址，≤200 字 }
+
+    CustomContent:
+      type: object
+      title: custom
+      required: [data, desc]
+      properties:
+        data:
+          type: object
+          description: 必须是 JSON 对象，压缩序列化后 ≤8KB
+        desc:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: 1–100 字，用于会话预览与离线推送文字
+
+    SendMessageRequest:
+      type: object
+      description: 发消息请求。content 按 type 取对应形态，多余字段会被丢弃。
+      required: [to, type, content, client_msg_id]
+      properties:
+        to: { type: string, description: 接收方 user_id，不能是自己；客户端可填 `@cs` 发给平台客服 }
+        type:
+          type: string
+          enum: [text, image, location, custom]
+        content:
+          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；location → LocationContent；custom → CustomContent
+          oneOf:
+            - $ref: '#/components/schemas/TextContent'
+            - $ref: '#/components/schemas/ImageUploadContent'
+            - $ref: '#/components/schemas/ImageUrlContent'
+            - $ref: '#/components/schemas/LocationContent'
+            - $ref: '#/components/schemas/CustomContent'
+        client_msg_id: { type: string, minLength: 1, maxLength: 64, description: 客户端生成的唯一 id（建议 UUID），重试时沿用同一个 }
+
+    ServerSendMessageRequest:
+      description: 代发请求，比客户端发消息多一个 `from`。代发图片请用外链图形态。
+      allOf:
+        - $ref: '#/components/schemas/SendMessageRequest'
+        - type: object
+          required: [from]
+          properties:
+            from: { type: string, description: 发送者 user_id，不能是 `@cs` }
+
+    Message:
+      type: object
+      description: 消息对象。发消息的返回、拉消息列表、推送、回调里都是这个形状。
+      required: [id, conversation_id, seq, from, type, content, client_msg_id, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        conversation_id: { type: integer, format: int64 }
+        seq: { type: integer, format: int64, description: 会话内序号，从 1 开始连续递增 }
+        from: { type: string, description: 发送者 user_id；客服发来的为 `@cs` }
+        type:
+          type: string
+          enum: [text, image, location, custom]
+        content:
+          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；location → LocationContent；custom → CustomContent
+          oneOf:
+            - $ref: '#/components/schemas/TextContent'
+            - $ref: '#/components/schemas/ImageAttachmentContent'
+            - $ref: '#/components/schemas/ImageUrlContent'
+            - $ref: '#/components/schemas/LocationContent'
+            - $ref: '#/components/schemas/CustomContent'
+        client_msg_id: { type: string }
+        created_at: { $ref: '#/components/schemas/DateTime' }
+
+    MessagePage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          description: 一律按 seq 升序
+          items: { $ref: '#/components/schemas/Message' }
+        has_more:
+          type: boolean
+          description: 查询方向上是否还有更多：补拉时表示后面还有新消息；翻历史 / 最新一页时表示更早还有
+
+    LastMessage:
+      type: object
+      required: [seq, from, type, preview, created_at]
+      properties:
+        seq: { type: integer, format: int64 }
+        from: { type: string }
+        type:
+          type: string
+          enum: [text, image, location, custom]
+        preview:
+          type: string
+          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，location 为「[位置]」，custom 取 desc
+        created_at: { $ref: '#/components/schemas/DateTime' }
+
+    Conversation:
+      type: object
+      description: 会话列表的一项。客服会话 `type` 为 `service`、`peer.user_id` 固定为 `@cs`。
+      required: [conversation_id, type, peer, last_message, unread, max_seq, read_seq, last_msg_at]
+      properties:
+        conversation_id: { type: integer, format: int64 }
+        type:
+          type: string
+          enum: [c2c, service]
+          description: c2c 普通单聊；service 平台客服会话
+        peer: { $ref: '#/components/schemas/User' }
+        last_message:
+          description: 最后一条消息摘要，极少数情况下为 null，请判空
+          oneOf:
+            - $ref: '#/components/schemas/LastMessage'
+            - type: 'null'
+        unread: { type: integer, format: int64, description: 未读数 = max_seq − read_seq }
+        max_seq: { type: integer, format: int64 }
+        read_seq: { type: integer, format: int64 }
+        last_msg_at: { $ref: '#/components/schemas/DateTime' }
+
+    # ---- 长连接推送事件 ----
+    PushMessage:
+      type: object
+      description: |
+        **经长连接下发**（不是 HTTP 响应），见接入文档 §6。新消息事件，同时推给收发双方的所有在线设备；
+        发送设备自己也会收到，按 `message.id`（或 `client_msg_id`）与 HTTP 返回去重。`seq` 大于本地最大 seq + 1 时说明漏了，需补拉。
+      required: [event, conversation_id, seq, message]
+      properties:
+        event: { type: string, const: message }
+        conversation_id: { type: integer, format: int64 }
+        seq: { type: integer, format: int64 }
+        message: { $ref: '#/components/schemas/Message' }
+
+    PushRead:
+      type: object
+      description: '**经长连接下发**，见接入文档 §6。标已读后推给本人所有在线设备，用于多端同步角标。'
+      required: [event, conversation_id, read_seq]
+      properties:
+        event: { type: string, const: read }
+        conversation_id: { type: integer, format: int64 }
+        read_seq: { type: integer, format: int64 }
+
+    PushReadAll:
+      type: object
+      description: |
+        **经长连接下发**，见接入文档 §6。一键清全部未读且确有变更时推给本人频道（所有在线设备，含发起设备），不带会话信息：
+        收到后把本地各会话未读清零、总未读归零，或重新拉一次会话列表。
+      required: [event]
+      properties:
+        event: { type: string, const: read_all }
