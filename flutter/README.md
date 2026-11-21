@@ -53,7 +53,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 
 | 成员 | 说明 |
 |---|---|
-| `login(userId)` / `logout({clearCache})` | 打开本地库、取令牌、连接、对账 / 断开并关库 |
+| `login(userId)` / `logout({clearCache})` | 打开本地库、取令牌、连接、对账 / 断开并关库。取令牌失败不抛异常，只报 disconnected；已登录同一用户时再调一次即重连 |
 | `currentUserId` / `totalUnread` / `connectionState` | 同步取值 |
 | `onNewMessage` | 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的不走这里 |
 | `onMessageUpdated` | 本设备消息状态变化（发送中 → 成功 / 失败 / 被拒收）、图片换新链接 |
@@ -87,6 +87,13 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 **打开聊天页时还没有会话，对方的昵称头像从哪来？**
 IM 不提供查他人资料的接口，资料归你的业务系统，聊天页用自家接口展示。
 `conversationWith(peerId)` 只查本地，返回 null 不一定代表没有会话（也可能还没同步到）。直接发消息就行，服务端会自动建会话。
+
+**连不上、一直 disconnected？**
+网络断开这类情况由 SDK 自动重连，连上后会对账补拉。但下面两种情况 SDK **不会自己重试**：
+- 取令牌失败（`tokenProvider` 抛了 `ImKickedOutException` 以外的异常，比如冷启动没网）；
+- 连续换令牌后服务端仍判定令牌无效。
+
+这时 `onConnectionChanged` 会停在 disconnected，但不会收到 `onKickedOut`。请在网络恢复或 App 回到前台时再调一次 `login(userId)`，已登录同一用户时它只做重连。期间发出的消息会标 `failed`（`NETWORK`），可以重发。
 
 **图片显示不出来？**
 上传图的链接每次读取时现签，约 24 小时有效，不要长期保存链接。显示前调 `imageUrl(msg)`：快过期时 SDK 会重拉，并把新消息经 `onMessageUpdated` 发出。

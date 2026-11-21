@@ -10,7 +10,8 @@ use GuzzleHttp\Exception\GuzzleException;
 /** IM 服务端接口客户端。每个方法返回响应包里的 data（数组），失败抛 ImException。 */
 class Client
 {
-    private const PREFIX = '/api/im/v1/server';
+    // 不以 / 开头：配合 base_uri 末尾的 /，baseUrl 带子路径（如 https://x.com/im）时不会被 Guzzle 丢掉。
+    private const PREFIX = 'api/im/v1/server';
 
     private Http $http;
 
@@ -20,7 +21,7 @@ class Client
     public function __construct(string $baseUrl, string $apiKey, array $options = [])
     {
         $cfg = [
-            'base_uri' => rtrim($baseUrl, '/'),
+            'base_uri' => rtrim($baseUrl, '/') . '/',
             'timeout' => $options['timeout'] ?? 5,
             'http_errors' => false,
             'headers' => [

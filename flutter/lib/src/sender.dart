@@ -260,6 +260,9 @@ class ImSender {
       );
     } on _LocalFailure catch (e) {
       return _finish(msg, ImMessageStatus.failed, e.code, e.message);
+    } catch (e) {
+      // 其余异常（多为 tokenProvider 自家接口断网）按临时失败处理：落库为 failed 并发事件，可重发。
+      return _finish(msg, ImMessageStatus.failed, 'NETWORK', e.toString());
     }
   }
 
