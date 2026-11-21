@@ -1,0 +1,19 @@
+name: guokit_im_example
+description: guokit_im 最小示例：登录、会话列表、收发文本与图片。
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: '>=3.10.3 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  guokit_im:
+    path: ../
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

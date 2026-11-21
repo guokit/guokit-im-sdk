@@ -616,9 +616,13 @@ if ($d['to'] !== '@cs' && $d['to_online'] === false) {
 
 客服发出的消息**不经过 before_send**（坐席是站点自己人），所以 before_send 里只会看到用户发给 `@cs` 的方向。
 
-## 11. 接口规范与 AI 接入
+## 11. SDK、接口规范与 AI 接入
 
-公开仓库 <https://github.com/guokit/im-sdk> 提供机器可读的接口规范与 AI 接入材料：
+公开仓库 <https://github.com/guokit/im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
+
+- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。
+- **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
+- 两者先以 git 依赖分发，安装方式见仓库 README。
 
 - **OpenAPI 3.1 规范**：`spec/openapi.yaml`，覆盖本文的服务端与客户端接口，可直接导入 Postman、Apifox 等工具生成请求集合或代码。
 - **给 AI 编码助手的说明**：`llms.txt`（索引）与 `llms-full.txt`（完整内容），可喂给 AI 助手作为接入上下文。

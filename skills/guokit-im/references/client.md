@@ -1,5 +1,8 @@
 # 客户端参考（App / Web）
 
+> **Flutter 首选 SDK**：[flutter/README.md](../../../flutter/README.md)（`guokit_im`），下面这些状态处理它都已包好。
+> 本页的手写片段给暂时没有 SDK 的平台（Web TS 等）参考。
+
 HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <用户令牌>`。
 长连接 `wss://<IM 域名>/api/im/v1/connect/websocket`，Centrifuge 协议，连接时把用户令牌作为 SDK 的 `token`。
 字段以 `docs/IM接入文档.md` §5–§7 为准。下面片段只示意正确的状态处理，存储层（`store`）换成你自己的本地库。

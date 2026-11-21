@@ -13,6 +13,12 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 
 权威资料：接口文档 `docs/IM接入文档.md`，机器可读规范 `spec/openapi.yaml`。本 skill 只讲流程与最容易写错的地方；字段细节以这两份为准，不要凭记忆编字段。
 
+## 先看有没有 SDK
+
+- **Flutter 客户端**：用 `guokit_im`（本仓库 `flutter/`），令牌续期、断线对账、本地缓存、发送重试与去重、图片链接重拉都已包好，下面客户端那半不用自己写。
+- **PHP 后端**：用 `guokit/im`（本仓库根 `composer.json`，代码在 `php/`），含回调验签。
+- 其他语言暂无 SDK，照本 skill 与 references 直接调接口。
+
 ## 接入清单
 
 后端：

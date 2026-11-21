@@ -1,5 +1,8 @@
 # 接入方后端参考
 
+> **PHP 首选 SDK**：[php/README.md](../../../php/README.md)（`guokit/im`，含回调验签）。
+> 本页的手写片段给暂时没有 SDK 的语言（Go / Node / Java）参考。
+
 前缀 `https://<IM 域名>/api/im/v1/server`，请求头 `X-Api-Key: imk_…`。响应 `{"code":0,"message":"ok","data":{…}}`，失败时 `code` 为字符串。
 下面片段是最小可用形态，演示正确的调用与判定方式；生产代码请补超时、重试与日志。字段以 `docs/IM接入文档.md` §4、§8 为准。
 
