@@ -1,0 +1,29 @@
+{
+    "name": "guokit/im",
+    "description": "guokit IM（果壳软件即时通讯）服务端 PHP SDK：导入用户、签令牌、封禁、黑名单、代发消息、回调验签",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["im", "chat", "guokit", "sdk"],
+    "homepage": "https://github.com/guokit/im-sdk",
+    "require": {
+        "php": ">=8.0",
+        "ext-json": "*",
+        "guzzlehttp/guzzle": "^7.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6 || ^10.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Guokit\\Im\\": "php/src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Guokit\\Im\\Tests\\": "php/tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

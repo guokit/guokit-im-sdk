@@ -1,2 +1,11 @@
 .DS_Store
 node_modules/
+/vendor/
+composer.lock
+.phpunit.result.cache
+.phpunit.cache/
+flutter/.dart_tool/
+flutter/build/
+flutter/pubspec.lock
+flutter/example/.dart_tool/
+flutter/example/build/
