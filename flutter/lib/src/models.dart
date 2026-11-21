@@ -71,6 +71,7 @@ class ImMessage {
     this.errorMessage,
     required this.createdAt,
     this.localPath,
+    this.urlFetchedAt,
   });
 
   /// 解析服务端消息对象（发消息返回、拉消息列表、推送里的 `message`）。
@@ -79,9 +80,11 @@ class ImMessage {
   /// - [peerId]：会话对方的 user_id。`from == me` 时 `to` 取它；调用方须传入，
   ///   缺省时 `to` 为空串（这条消息本人在别的设备发出、而本地还不知道会话对方）。
   /// - `from != me` 时 `to = me`，与 [peerId] 无关。
+  /// - 上传图（content 有 `attachment_id`）的链接是服务端读取时现签的，[urlFetchedAt] 取本机当前时间。
   factory ImMessage.fromServer(Map json, {required String me, String? peerId}) {
     final from = json['from'] as String;
     final isSelf = from == me;
+    final content = _map(json['content']);
     return ImMessage(
       id: _intOrNull(json['id']),
       clientMsgId: json['client_msg_id'] as String,
@@ -91,9 +94,12 @@ class ImMessage {
       to: isSelf ? (peerId ?? '') : me,
       isSelf: isSelf,
       type: json['type'] as String,
-      content: _map(json['content']),
+      content: content,
       status: ImMessageStatus.sent,
       createdAt: parseCst(json['created_at'] as String),
+      urlFetchedAt: content.containsKey('attachment_id')
+          ? DateTime.now().toUtc()
+          : null,
     );
   }
 
@@ -113,6 +119,9 @@ class ImMessage {
     errorMessage: json['error_message'] as String?,
     createdAt: _fromMs(json['created_at']),
     localPath: json['local_path'] as String?,
+    urlFetchedAt: json['url_fetched_at'] == null
+        ? null
+        : _fromMs(json['url_fetched_at']),
   );
 
   /// 服务端消息 id；本地「发送中 / 失败」时为 null。
@@ -151,6 +160,10 @@ class ImMessage {
   /// 本设备发出的图片的本地文件路径（io 端重发时重读用），其余为 null。
   final String? localPath;
 
+  /// 上传图（content 有 `attachment_id`）的临时链接是何时取得的（UTC），用来判断是否该重拉（spec §3.5）。
+  /// 其余消息为 null。
+  final DateTime? urlFetchedAt;
+
   /// 复制并替换部分字段。可空字段显式传 `null` 即清空（如重发前清掉 `errorCode`）。
   ImMessage copyWith({
     Object? id = _unset,
@@ -167,6 +180,7 @@ class ImMessage {
     Object? errorMessage = _unset,
     DateTime? createdAt,
     Object? localPath = _unset,
+    Object? urlFetchedAt = _unset,
   }) => ImMessage(
     id: identical(id, _unset) ? this.id : id as int?,
     clientMsgId: clientMsgId ?? this.clientMsgId,
@@ -190,6 +204,9 @@ class ImMessage {
     localPath: identical(localPath, _unset)
         ? this.localPath
         : localPath as String?,
+    urlFetchedAt: identical(urlFetchedAt, _unset)
+        ? this.urlFetchedAt
+        : urlFetchedAt as DateTime?,
   );
 
   /// SDK 内部格式（存储层用）：`content` 仍是 Map，`created_at` 为 UTC 毫秒时间戳，`status` 为枚举名。
@@ -208,6 +225,7 @@ class ImMessage {
     'error_message': errorMessage,
     'created_at': createdAt.millisecondsSinceEpoch,
     'local_path': localPath,
+    'url_fetched_at': urlFetchedAt?.millisecondsSinceEpoch,
   };
 
   @override
