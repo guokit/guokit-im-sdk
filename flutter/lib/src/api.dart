@@ -25,6 +25,7 @@ class ImApi {
     required TokenManager tokens,
     http.Client? client,
     this.timeout = const Duration(seconds: 15),
+    this.uploadTimeout = const Duration(seconds: 60),
   }) : _base = baseUrl.endsWith('/')
            ? baseUrl.substring(0, baseUrl.length - 1)
            : baseUrl,
@@ -41,6 +42,9 @@ class ImApi {
 
   /// 单次请求（发出到读完响应体）的超时，超时抛 `ImApiException('NETWORK', …, 0)`。
   final Duration timeout;
+
+  /// 上传图片的超时：图片最大 8MB，慢网下 15 秒不够。
+  final Duration uploadTimeout;
 
   /// `GET /me`：当前用户，可用作令牌自检。
   Future<ImPeer> me() async =>
@@ -81,7 +85,7 @@ class ImApi {
             http.MultipartFile.fromBytes('file', bytes, filename: filename),
           );
         return r;
-      }),
+      }, timeout: uploadTimeout),
     );
     return (
       attachmentId: (d['attachment_id'] as num).toInt(),
@@ -238,18 +242,18 @@ class ImApi {
   ///
   /// HTTP 401 + `IM_TOKEN_INVALID` 时换令牌后重试一次；再失败照常抛。
   /// 换令牌时 `tokenProvider` 抛的异常（含 [ImKickedOutException]）原样上抛。
-  Future<Object?> _send(_Build build) async {
+  Future<Object?> _send(_Build build, {Duration? timeout}) async {
     var token = await _tokens.current();
     try {
-      return await _once(build(token));
+      return await _once(build(token), timeout ?? this.timeout);
     } on ImApiException catch (e) {
       if (e.httpStatus != 401 || !e.isTokenInvalid) rethrow;
     }
     token = await _tokens.refresh(stale: token);
-    return _once(build(token));
+    return _once(build(token), timeout ?? this.timeout);
   }
 
-  Future<Object?> _once(http.BaseRequest req) async {
+  Future<Object?> _once(http.BaseRequest req, Duration timeout) async {
     final http.Response res;
     try {
       res = await _client

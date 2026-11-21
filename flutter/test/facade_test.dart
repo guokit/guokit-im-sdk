@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -6,29 +5,7 @@ import 'package:guokit_im/guokit_im.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-class FakeRealtime implements ImRealtime {
-  FakeRealtime(String token) : tokens = [token];
-  final List<String> tokens;
-  final _ctrl = StreamController<ImRealtimeEvent>.broadcast();
-  int connects = 0;
-
-  void emit(ImRealtimeEvent e) => _ctrl.add(e);
-
-  @override
-  Stream<ImRealtimeEvent> get events => _ctrl.stream;
-  @override
-  void setToken(String token) => tokens.add(token);
-  @override
-  Future<void> connect() async {
-    connects++;
-    emit(const ImRealtimeConnected());
-  }
-
-  @override
-  Future<void> disconnect() async {}
-  @override
-  Future<void> close() async {}
-}
+import 'fakes.dart';
 
 Map<String, dynamic> _msg(int conv, int seq) => {
   'id': conv * 100 + seq,

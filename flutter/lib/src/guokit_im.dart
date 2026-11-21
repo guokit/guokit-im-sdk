@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
@@ -12,6 +13,7 @@ import 'models.dart';
 import 'realtime.dart';
 import 'store.dart';
 import 'store_factory.dart';
+import 'sender.dart';
 import 'sync.dart';
 import 'token.dart';
 
@@ -70,6 +72,7 @@ class GuokitIm {
   /// 每次登录 / 登出自增；异步回调发现会话号变了就作废。
   int _session = 0;
   ImSync? _sync;
+  ImSender? _sender;
   ImRealtime? _rt;
   StreamSubscription<ImRealtimeEvent>? _rtSub;
   String? _rtToken;
@@ -138,6 +141,15 @@ class GuokitIm {
         if (e is ImKickedOutException) _kick();
       },
     );
+    _sender = ImSender(
+      api: _api,
+      store: _store,
+      sync: _sync!,
+      me: userId,
+      onUpdated: _messageUpdated.add,
+      onSnapshot: _emitSnapshot,
+      onKickedOut: _kick,
+    );
     await _emitSnapshot(forceTotal: true);
     await _connect();
   }
@@ -149,6 +161,7 @@ class GuokitIm {
     _session++;
     _sync?.close();
     _sync = null;
+    _sender = null;
     await _rtSub?.cancel();
     _rtSub = null;
     final rt = _rt;
@@ -315,7 +328,58 @@ class GuokitIm {
     int? limit,
   }) => _call(() => _api.blocks(offset: offset, limit: limit));
 
+  // ---------------- 发送 ----------------
+  //
+  // 都返回 `Future<ImMessage>`：本地「发送中」消息立即经 [onMessageUpdated] 发出，Future 在终态
+  // （sent / failed / rejected）完成。**发送失败不抛异常**，看 `status` 与 `errorCode`（含义见 sender.dart）。
+  // 只有未登录（StateError）、参数用错（ArgumentError / UnsupportedError）这类编程错误会抛。
+
+  /// 发文本。
+  Future<ImMessage> sendText(String to, String text) =>
+      _requireSender().sendText(to, text);
+
+  /// 按文件路径发图（iOS / Android）。Web 上抛 [UnsupportedError]，请用 [sendImageBytes]。
+  Future<ImMessage> sendImage(String to, String filePath) =>
+      _requireSender().sendImage(to, filePath);
+
+  /// 按字节发图（Web 必须用这个）。
+  Future<ImMessage> sendImageBytes(
+    String to,
+    Uint8List bytes, {
+    String filename = 'image.jpg',
+  }) => _requireSender().sendImageBytes(to, bytes, filename: filename);
+
+  /// 发位置。
+  Future<ImMessage> sendLocation(
+    String to,
+    double lat,
+    double lng, {
+    String? name,
+    String? address,
+  }) =>
+      _requireSender().sendLocation(to, lat, lng, name: name, address: address);
+
+  /// 发自定义消息。[data] 必须是 JSON 对象，[desc] 用于会话预览与离线推送文字。
+  Future<ImMessage> sendCustom(
+    String to,
+    Map<String, dynamic> data,
+    String desc,
+  ) => _requireSender().sendCustom(to, data, desc);
+
+  /// 重发 failed 消息，沿用原 clientMsgId。传入非 failed（含 rejected）抛 [ArgumentError]。
+  Future<ImMessage> resend(ImMessage failed) => _requireSender().resend(failed);
+
+  /// 图片可用地址：外链图原样返回；上传图链接过期（取得超过 20 小时或为空）时重拉这条消息，
+  /// 更新本地并发 [onMessageUpdated] 后返回新地址；重拉失败返回旧地址。非图片返回 null。
+  Future<String?> imageUrl(ImMessage message) =>
+      _requireSender().imageUrl(message);
+
   // ---------------- 内部 ----------------
+
+  ImSender _requireSender() {
+    _requireLogin();
+    return _sender!;
+  }
 
   String _requireLogin() {
     final me = _me;
