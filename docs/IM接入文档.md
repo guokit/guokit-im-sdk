@@ -338,6 +338,8 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 **Origin 规则**：不带 `Origin` 头的连接（Flutter 等原生 App）直接放行；带 `Origin` 时放行与 IM 域名同源的页面，以及「IM 设置 → 允许的 Origin」里精确匹配的 `scheme://host[:port]`（最多 20 个）。Web 端跨域接入必须先加白名单。
 
+同一份白名单也用于**客户端 HTTP 接口的跨域**（`/api/im/v1/*` 终端用户接口与 `/api/imcs/v1/*`）：白名单内的页面可直接从浏览器调用，预检 `OPTIONS` 回 204 并放行 `Authorization`、`Content-Type` 请求头；白名单外的预检回 403。服务端接口 `/api/im/v1/server/*` 不支持浏览器跨域调用（API Key 不能出现在前端）。
+
 **Dart 最小示例**（`centrifuge: ^0.21.0`）：
 
 ```dart
