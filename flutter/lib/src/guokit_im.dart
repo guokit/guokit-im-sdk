@@ -1,0 +1,442 @@
+/// 门面 [GuokitIm]：组装 HTTP、令牌、存储、长连接与同步，对外只暴露 Dart 自带的 `Stream`。
+library;
+
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:http/http.dart' as http;
+
+import 'api.dart';
+import 'errors.dart';
+import 'models.dart';
+import 'realtime.dart';
+import 'store.dart';
+import 'store_factory.dart';
+import 'sync.dart';
+import 'token.dart';
+
+/// SDK 配置。
+class ImConfig {
+  const ImConfig({
+    required this.baseUrl,
+    required this.tokenProvider,
+    this.store,
+    this.httpClient,
+    this.realtimeFactory,
+  });
+
+  /// IM 服务地址，如 `https://im.example.com`。长连接地址由它推导（https → wss）。
+  final String baseUrl;
+
+  /// 向自家后端取 IM 令牌。用户已封禁 / 已登出时抛 [ImKickedOutException]（spec §3.6）。
+  final Future<ImToken> Function() tokenProvider;
+
+  /// 本地存储；默认 iOS / Android 用 SQLite、Web 用内存。桌面端需自行注入。
+  final ImStore? store;
+
+  /// HTTP 客户端（测试注入），默认新建。
+  final http.Client? httpClient;
+
+  /// 长连接实现（测试注入），默认 centrifuge。
+  final ImRealtimeFactory? realtimeFactory;
+}
+
+class GuokitIm {
+  GuokitIm(this.config) : _store = config.store ?? createDefaultStore() {
+    _tokens = TokenManager(config.tokenProvider);
+    _api = ImApi(
+      baseUrl: config.baseUrl,
+      tokens: _tokens,
+      client: config.httpClient,
+    );
+  }
+
+  final ImConfig config;
+  final ImStore _store;
+  late final TokenManager _tokens;
+  late final ImApi _api;
+
+  final _newMessage = StreamController<ImMessage>.broadcast();
+  final _messageUpdated = StreamController<ImMessage>.broadcast();
+  final _conversations = StreamController<List<ImConversation>>.broadcast();
+  final _totalUnreadCtrl = StreamController<int>.broadcast();
+  final _connection = StreamController<ImConnectionState>.broadcast();
+  final _kickedOut = StreamController<void>.broadcast();
+
+  String? _me;
+  int _totalUnread = 0;
+  ImConnectionState _state = ImConnectionState.disconnected;
+
+  /// 每次登录 / 登出自增；异步回调发现会话号变了就作废。
+  int _session = 0;
+  ImSync? _sync;
+  ImRealtime? _rt;
+  StreamSubscription<ImRealtimeEvent>? _rtSub;
+  String? _rtToken;
+  bool _kicked = false;
+
+  /// 连续 3500 换令牌重连的次数，连上后清零；到上限就停（防止 provider 一直给坏令牌时死循环）。
+  int _authRetries = 0;
+  static const int _maxAuthRetries = 2;
+
+  // ---------------- 状态与事件 ----------------
+
+  /// 当前登录用户，未登录为 null。
+  String? get currentUserId => _me;
+
+  /// 当前总未读（各会话 `maxSeq − readSeq` 之和）。
+  int get totalUnread => _totalUnread;
+
+  ImConnectionState get connectionState => _state;
+
+  /// 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的不走这里。
+  Stream<ImMessage> get onNewMessage => _newMessage.stream;
+
+  /// 本地消息变化：发送中 → 成功 / 失败 / 被拒收；图片换新链接。
+  Stream<ImMessage> get onMessageUpdated => _messageUpdated.stream;
+
+  /// 会话列表快照（按最后消息时间倒序）。
+  Stream<List<ImConversation>> get onConversationsChanged =>
+      _conversations.stream;
+
+  /// 总未读；登录时先推一次初始值，之后变化才推。
+  Stream<int> get onTotalUnreadChanged => _totalUnreadCtrl.stream;
+
+  Stream<ImConnectionState> get onConnectionChanged => _connection.stream;
+
+  /// 被封禁或踢下线。SDK 已停止重连，App 应走登出。
+  Stream<void> get onKickedOut => _kickedOut.stream;
+
+  /// 同步队列排空时完成。
+  @visibleForTesting
+  Future<void> get idle => _sync?.idle ?? Future<void>.value();
+
+  // ---------------- 登录 / 登出 ----------------
+
+  /// 打开该用户本地库 → 推一次本地快照与总未读初始值 → 取令牌 → 连接；连上后自动对账。
+  ///
+  /// 不等对账完成就返回。取令牌失败不抛异常：provider 抛 [ImKickedOutException] 走 [onKickedOut]，
+  /// 抛其他异常报 `disconnected`；本地数据照常可读。已登录同一用户且已断开时再调一次即重连。
+  Future<void> login(String userId) async {
+    if (_me != null && (_me != userId || _kicked)) await logout();
+    if (_me == userId) {
+      if (_state == ImConnectionState.disconnected) await _connect();
+      return;
+    }
+    _session++;
+    _authRetries = 0;
+    await _store.open(userId); // 打开失败直接抛，状态保持未登录
+    _me = userId;
+    _sync = ImSync(
+      api: _api,
+      store: _store,
+      me: userId,
+      onNewMessage: _newMessage.add,
+      onMessageUpdated: _messageUpdated.add,
+      onChanged: _emitSnapshot,
+      onError: (e) {
+        if (e is ImKickedOutException) _kick();
+      },
+    );
+    await _emitSnapshot(forceTotal: true);
+    await _connect();
+  }
+
+  /// 断开、清令牌、关闭本地库。[clearCache] 为 true 时删除该用户本地库。
+  Future<void> logout({bool clearCache = false}) async {
+    final me = _me;
+    if (me == null) return;
+    _session++;
+    _sync?.close();
+    _sync = null;
+    await _rtSub?.cancel();
+    _rtSub = null;
+    final rt = _rt;
+    _rt = null;
+    if (rt != null) {
+      try {
+        await rt.close();
+      } catch (_) {}
+    }
+    _tokens.clear();
+    _rtToken = null;
+    if (clearCache) {
+      await _store.deleteAll(me);
+    } else {
+      await _store.close();
+    }
+    _me = null;
+    _kicked = false;
+    if (_totalUnread != 0) {
+      _totalUnread = 0;
+      _totalUnreadCtrl.add(0);
+    }
+    _setState(ImConnectionState.disconnected);
+  }
+
+  /// 登出并关闭全部事件流与 HTTP 客户端，之后不能再用。
+  Future<void> dispose() async {
+    await logout();
+    _api.close();
+    for (final c in [
+      _newMessage,
+      _messageUpdated,
+      _conversations,
+      _totalUnreadCtrl,
+      _connection,
+      _kickedOut,
+    ]) {
+      await c.close();
+    }
+  }
+
+  // ---------------- 会话与消息 ----------------
+
+  /// 先返回本地快照，同时在后台排一次对账（结果经 [onConversationsChanged] 推出）。
+  Future<List<ImConversation>> conversations() async {
+    _requireLogin();
+    final list = await _store.listConversations();
+    unawaited(_sync?.reconcile());
+    return list;
+  }
+
+  /// 只查本地。null 可能是还没会话，也可能是还没同步到；聊天页照样可以直接发消息。
+  Future<ImConversation?> conversationWith(String peerId) {
+    _requireLogin();
+    return _store.conversationByPeer(peerId);
+  }
+
+  /// 按 seq 升序返回一页消息，本地优先，本地不连续或不足时从服务端补齐。
+  ///
+  /// - [before] 为空（或是未确认消息）：最新一页，末尾按 `createdAt` 追加发给该会话对方的未确认消息；
+  ///   从没拉过的会话拉服务端最新一页并记下 `syncedSeq`；拉过但落后的先补拉追平。
+  /// - [before] 非空：`seq < before.seq` 的 [limit] 条，不含未确认消息。
+  Future<List<ImMessage>> messages(
+    int conversationId, {
+    ImMessage? before,
+    int limit = 30,
+  }) => _call(() async {
+    _requireLogin();
+    final sync = _sync!;
+    final beforeSeq = before?.seq;
+
+    if (beforeSeq != null) {
+      if (beforeSeq <= 1) return <ImMessage>[];
+      var local = await _store.messages(
+        conversationId,
+        beforeSeq: beforeSeq,
+        limit: limit,
+      );
+      if (!_complete(local, limit, beforeSeq: beforeSeq)) {
+        final r = await _api.messages(
+          conversationId,
+          beforeSeq: beforeSeq,
+          limit: limit,
+        );
+        await sync.ingest(conversationId, r.items, notify: false);
+        local = await _store.messages(
+          conversationId,
+          beforeSeq: beforeSeq,
+          limit: limit,
+        );
+      }
+      return local;
+    }
+
+    var fetched = false;
+    Future<void> fetchLatest() async {
+      fetched = true;
+      final r = await _api.messages(conversationId, limit: limit);
+      await sync.ingest(conversationId, r.items, notify: false);
+      if (r.items.isNotEmpty && await _store.syncedSeq(conversationId) == 0) {
+        await _store.setSyncedSeq(
+          conversationId,
+          (r.items.last['seq'] as num).toInt(),
+        );
+      }
+    }
+
+    final conv = await _store.getConversation(conversationId);
+    final synced = await _store.syncedSeq(conversationId);
+    if (synced == 0) {
+      await fetchLatest();
+    } else if (conv != null && synced < conv.maxSeq) {
+      await sync.pullAfter(conversationId, synced, notify: false);
+    }
+    var local = await _store.messages(conversationId, limit: limit);
+    if (!fetched && !_complete(local, limit)) {
+      await fetchLatest();
+      local = await _store.messages(conversationId, limit: limit);
+    }
+
+    final peer = (await _store.getConversation(conversationId))?.peer.userId;
+    final pending = peer == null
+        ? <ImMessage>[]
+        : (await _store.unconfirmedMessages(peer)
+            ..sort((a, b) => a.createdAt.compareTo(b.createdAt)));
+    if (fetched || pending.isNotEmpty) await _emitSnapshot();
+    return [...local, ...pending];
+  });
+
+  /// 本地这一页是否可直接用：seq 连续，条数够或已到第 1 条，翻历史时还要紧接 [beforeSeq]。
+  static bool _complete(List<ImMessage> l, int limit, {int? beforeSeq}) {
+    if (l.isEmpty) return false;
+    for (var i = 1; i < l.length; i++) {
+      if (l[i].seq != l[i - 1].seq! + 1) return false;
+    }
+    if (beforeSeq != null && l.last.seq != beforeSeq - 1) return false;
+    return l.length >= limit || l.first.seq == 1;
+  }
+
+  /// 标已读到该会话当前最大 seq，更新服务端并即时更新本地未读。
+  Future<void> markRead(int conversationId) => _call(() async {
+    _requireLogin();
+    final conv = await _store.getConversation(conversationId);
+    if (conv == null || conv.readSeq >= conv.maxSeq) return;
+    final r = await _api.markRead(conversationId, conv.maxSeq);
+    await _store.setReadSeq(conversationId, r.readSeq);
+    await _emitSnapshot();
+  });
+
+  /// 一键清全部未读。
+  Future<void> markAllRead() => _call(() async {
+    _requireLogin();
+    await _api.markAllRead();
+    await _store.markAllRead();
+    await _emitSnapshot();
+  });
+
+  Future<void> block(String userId) => _call(() => _api.block(userId));
+
+  Future<void> unblock(String userId) => _call(() => _api.unblock(userId));
+
+  Future<({List<ImBlockItem> items, bool hasMore})> blocks({
+    int? offset,
+    int? limit,
+  }) => _call(() => _api.blocks(offset: offset, limit: limit));
+
+  // ---------------- 内部 ----------------
+
+  String _requireLogin() {
+    final me = _me;
+    if (me == null) throw StateError('GuokitIm 未登录');
+    return me;
+  }
+
+  /// HTTP 调用统一入口：换令牌时 provider 抛 [ImKickedOutException] 先走 [onKickedOut] 再上抛。
+  Future<T> _call<T>(Future<T> Function() f) async {
+    try {
+      return await f();
+    } on ImKickedOutException {
+      _kick();
+      rethrow;
+    }
+  }
+
+  void _setState(ImConnectionState s) {
+    if (_state == s) return;
+    _state = s;
+    _connection.add(s);
+  }
+
+  Future<void> _emitSnapshot({bool forceTotal = false}) async {
+    final session = _session;
+    if (_me == null) return;
+    final list = await _store.listConversations();
+    final total = await _store.totalUnread();
+    if (session != _session) return;
+    _conversations.add(list);
+    if (forceTotal || total != _totalUnread) {
+      _totalUnread = total;
+      _totalUnreadCtrl.add(total);
+    }
+  }
+
+  Future<void> _connect() async {
+    final session = _session;
+    _setState(ImConnectionState.connecting);
+    final String token;
+    try {
+      token = await _tokens.current();
+    } on ImKickedOutException {
+      if (session == _session) _kick();
+      return;
+    } catch (_) {
+      if (session == _session) _setState(ImConnectionState.disconnected);
+      return;
+    }
+    if (session != _session) return;
+    var rt = _rt;
+    if (rt == null) {
+      final factory = config.realtimeFactory ?? CentrifugeRealtime.new;
+      rt = _rt = factory(imWebSocketUrl(config.baseUrl), token);
+      _rtSub = rt.events.listen((e) => _onRealtime(e, session));
+    } else {
+      rt.setToken(token);
+    }
+    _rtToken = token;
+    try {
+      await rt.connect();
+    } catch (_) {
+      if (session == _session) _setState(ImConnectionState.disconnected);
+    }
+  }
+
+  void _onRealtime(ImRealtimeEvent e, int session) {
+    if (session != _session || _kicked) return;
+    try {
+      switch (e) {
+        case ImRealtimeConnecting():
+          _setState(ImConnectionState.connecting);
+        case ImRealtimeConnected():
+          _authRetries = 0;
+          _setState(ImConnectionState.connected);
+          unawaited(_sync?.reconcile());
+        case ImRealtimeDisconnected(:final code):
+          if (code == 3503) {
+            _kick();
+          } else if (code == 3500) {
+            unawaited(_reauth(session));
+          } else {
+            _setState(ImConnectionState.disconnected);
+          }
+        case ImRealtimePublication(:final data):
+          unawaited(_sync?.handlePush(data));
+      }
+    } catch (_) {
+      // 事件处理不能抛出去。
+    }
+  }
+
+  /// 3500：换令牌（单次）后 setToken + connect。3500 不触发 centrifuge 的 getToken，要手动做。
+  Future<void> _reauth(int session) async {
+    if (_authRetries >= _maxAuthRetries) {
+      _setState(ImConnectionState.disconnected);
+      return;
+    }
+    _authRetries++;
+    _setState(ImConnectionState.connecting);
+    try {
+      final t = await _tokens.refresh(stale: _rtToken);
+      final rt = _rt;
+      if (session != _session || _kicked || rt == null) return;
+      _rtToken = t;
+      rt.setToken(t);
+      await rt.connect();
+    } on ImKickedOutException {
+      if (session == _session) _kick();
+    } catch (_) {
+      if (session == _session) _setState(ImConnectionState.disconnected);
+    }
+  }
+
+  /// 被封 / 被踢：停止重连，不再调 provider，发 [onKickedOut]。本地库保持打开，等 App 调 [logout]。
+  void _kick() {
+    if (_me == null || _kicked) return;
+    _kicked = true;
+    _setState(ImConnectionState.disconnected);
+    _kickedOut.add(null);
+    final rt = _rt;
+    if (rt != null) unawaited(rt.disconnect().catchError((Object _) {}));
+  }
+}

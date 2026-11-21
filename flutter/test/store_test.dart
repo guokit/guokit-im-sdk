@@ -2,8 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guokit_im/guokit_im.dart';
-import 'package:guokit_im/src/store.dart';
-import 'package:guokit_im/src/store_memory.dart';
 import 'package:guokit_im/src/store_sqlite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
