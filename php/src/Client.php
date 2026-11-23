@@ -53,6 +53,23 @@ class Client
         return $this->call('POST', '/users/batch', ['json' => ['users' => array_values($users)]]);
     }
 
+    /**
+     * 批量查询在线状态（1–100 个）。返回 [user_id => bool]，按请求顺序、重复的 id 只出现一次。
+     * 不存在、被封禁的用户为 false。这是在线状态的权威来源，user_state 回调只是提醒。
+     *
+     * @param string[] $userIds
+     * @return array<string, bool>
+     */
+    public function onlineStatus(array $userIds): array
+    {
+        $data = $this->call('POST', '/users/online', ['json' => ['user_ids' => array_values($userIds)]]);
+        $out = [];
+        foreach ($data['items'] ?? [] as $item) {
+            $out[(string) $item['user_id']] = (bool) $item['online'];
+        }
+        return $out;
+    }
+
     public function issueToken(string $userId): array
     {
         return $this->call('POST', '/users/' . rawurlencode($userId) . '/token');

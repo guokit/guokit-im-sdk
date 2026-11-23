@@ -24,6 +24,19 @@ class ClientTest extends TestCase
         return new Client('https://im.example.com', 'imk_test', ['handler' => $stack]);
     }
 
+    public function testOnlineStatus(): void
+    {
+        $im = $this->client(new Response(200, [], json_encode([
+            'code' => 0, 'message' => 'ok',
+            'data' => ['items' => [['user_id' => 'u1', 'online' => true], ['user_id' => 'u2', 'online' => false]]],
+        ])));
+        $this->assertSame(['u1' => true, 'u2' => false], $im->onlineStatus(['u1', 'u2']));
+        $req = $this->history[0]['request'];
+        $this->assertSame('POST', $req->getMethod());
+        $this->assertSame('/api/im/v1/server/users/online', $req->getUri()->getPath());
+        $this->assertSame(['user_ids' => ['u1', 'u2']], json_decode((string) $req->getBody(), true));
+    }
+
     public function testIssueTokenOk(): void
     {
         $im = $this->client(new Response(200, [], json_encode([

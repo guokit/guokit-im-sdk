@@ -127,6 +127,8 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 | 自家拉黑后同步 | `PUT /users/{user_id}/blocks/{target}`；解除 `DELETE` 同路径；幂等，失败可直接重试 |
 | 以某用户身份发消息 | `POST /messages`，请求体同客户端发消息再加 `from`；from / to 不能是 `@cs` |
 | 审计查历史 | `GET /conversations/{id}/messages` |
+| 查用户是否在线 | `POST /users/online` `{"user_ids":[…]}`，每次 1–100 个，返回 `items[{user_id, online}]`；在线 = 此刻至少一条长连接，这是权威来源 |
+| 收上下线通知 | IM 设置打开「推送用户上下线」后收 `user_state` 回调 `{user_id, online, at, ts}`；下线在断开 30 秒后才推；按 `ts` 保留最新，重启不补发下线，以查询为准 |
 | 代发订单 / 商品卡片 | `POST /messages`，`type: custom`，在 `content.data.im_card` 里带标准卡片外壳（title 必填；fields 放订单号、状态等发送时快照；web_link / app_link / mp_path 分别给网页、App、小程序），客服工作台按它画卡片，见接入文档 §5.9 |
 
 黑名单以接入方为准时：在自家拉黑事务提交后调 IM；IM 调用失败就记一条待重试任务，不要回滚自家拉黑。

@@ -51,6 +51,7 @@ try {
 | `blocks($userId, $offset = 0, $limit = 50)` | 黑名单列表，返回 `items` 与 `has_more` |
 | `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式 |
 | `history($conversationId, $afterSeq = null, $beforeSeq = null, $limit = 30)` | 查会话历史（审计） |
+| `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |
 
 `user_id`、`target` 进路径前已自动 `rawurlencode`。`ImException` 的 `getErrorCode()` 在非业务错误时取值：`NETWORK`（网络异常）、`INTERNAL`（响应不是合法 JSON）、`CALLBACK_INVALID`（回调验签失败）。
 
@@ -58,7 +59,7 @@ try {
 
 必须用**原始请求体**验签，不要先 `json_decode` 再编码。时间戳须为数字且与当前相差不超过 300 秒（第 5 个参数可改）。
 
-`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
+`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `user_state`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
 
 响应体用 `Callback::allow()`、`Callback::reject('原因')`、`Callback::ack()` 生成（均返回 JSON 字符串）。
 
