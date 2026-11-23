@@ -75,4 +75,54 @@ void main() {
       ),
     );
   });
+
+  test('客服接口走 /api/imcs/v1：取状态、评价，「无法评价」抛 VALIDATION', () async {
+    final seen = <String>[];
+    final api = ImApi(
+      baseUrl: 'https://im.example.com',
+      tokens: TokenManager(() async => ImToken('t', _week)),
+      client: MockClient((req) async {
+        seen.add('${req.method} ${req.url}');
+        if (req.method == 'GET') {
+          return _res({
+            'code': 0,
+            'message': 'ok',
+            'data': {
+              'status': 'queued',
+              'session_id': 305,
+              'queue_position': 2,
+            },
+          });
+        }
+        final body = jsonDecode(req.body) as Map;
+        if (body['rating'] == 5) {
+          expect(body, {'rating': 5, 'comment': '很及时'});
+          return _res({
+            'code': 0,
+            'message': 'ok',
+            'data': {'id': 305},
+          });
+        }
+        return _res({'code': 'VALIDATION', 'message': '无法评价', 'data': {}}, 400);
+      }),
+    );
+
+    final st = await api.csState();
+    expect(
+      (st.status, st.sessionId, st.queuePosition),
+      (ImCsStatus.queued, 305, 2),
+    );
+    await api.csRate(305, 5, comment: '很及时');
+    await expectLater(
+      api.csRate(305, 4),
+      throwsA(
+        isA<ImApiException>().having((e) => e.code, 'code', 'VALIDATION'),
+      ),
+    );
+    expect(seen, [
+      'GET https://im.example.com/api/imcs/v1/state',
+      'POST https://im.example.com/api/imcs/v1/sessions/305/rating',
+      'POST https://im.example.com/api/imcs/v1/sessions/305/rating',
+    ]);
+  });
 }

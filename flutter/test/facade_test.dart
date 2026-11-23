@@ -183,17 +183,17 @@ void main() {
     rt.badTokens.addAll(['t1', 't2', 't3']);
     rt.emit(const ImRealtimeDisconnected(3500, 'token'));
     await settle();
-    expect((providerCalls, im.connectionState), (
-      3,
-      ImConnectionState.disconnected,
-    ));
+    expect(
+      (providerCalls, im.connectionState),
+      (3, ImConnectionState.disconnected),
+    );
 
     await im.login('u1');
     await settle();
     expect(rt.tokens.last, 't4');
-    expect((providerCalls, im.connectionState), (
-      4,
-      ImConnectionState.connected,
-    ));
+    expect(
+      (providerCalls, im.connectionState),
+      (4, ImConnectionState.connected),
+    );
   });
 }

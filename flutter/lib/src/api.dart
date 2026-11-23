@@ -35,6 +35,9 @@ class ImApi {
 
   static const String _prefix = '/api/im/v1';
 
+  /// 客服接口前缀（接入文档 §10.4、§10.5），鉴权与 IM 客户端接口相同。
+  static const String _csPrefix = '/api/imcs/v1';
+
   final String _base;
   final TokenManager _tokens;
   final http.Client _client;
@@ -204,6 +207,23 @@ class ImApi {
     );
   }
 
+  /// `GET /api/imcs/v1/state`：当前客服接待状态。
+  Future<ImCsState> csState() async => ImCsState.fromServer(
+    _asMap(await _json('GET', '/state', prefix: _csPrefix)),
+  );
+
+  /// `POST /api/imcs/v1/sessions/{id}/rating`：评价一次已结束的接待，[sessionId] 取评价邀请消息的
+  /// `content.data.session_id`。重复评价、评别人的或未结束的回 400 `VALIDATION`（「无法评价」）。
+  Future<void> csRate(int sessionId, int rating, {String? comment}) => _json(
+    'POST',
+    '/sessions/$sessionId/rating',
+    prefix: _csPrefix,
+    body: {
+      'rating': rating,
+      if (comment != null && comment.isNotEmpty) 'comment': comment,
+    },
+  );
+
   /// 关闭底层 HTTP 客户端（只关自己创建的，外部传入的由调用方管理）。
   void close() {
     if (_ownsClient) _client.close();
@@ -211,8 +231,8 @@ class ImApi {
 
   // ---------------- 内部 ----------------
 
-  Uri _uri(String path, [Map<String, String>? query]) {
-    final u = Uri.parse('$_base$_prefix$path');
+  Uri _uri(String path, [Map<String, String>? query, String prefix = _prefix]) {
+    final u = Uri.parse('$_base$prefix$path');
     return (query == null || query.isEmpty)
         ? u
         : u.replace(queryParameters: query);
@@ -224,8 +244,9 @@ class ImApi {
     String path, {
     Map<String, String>? query,
     Object? body,
+    String prefix = _prefix,
   }) {
-    final uri = _uri(path, query);
+    final uri = _uri(path, query, prefix);
     final encoded = body == null ? null : jsonEncode(body);
     return _send((token) {
       final r = http.Request(method, uri)

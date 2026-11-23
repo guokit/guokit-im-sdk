@@ -151,4 +151,4 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 ## 6. 平台客服
 
 站点装了客服模块时，`to: "@cs"` 就是给平台客服发消息，客服会话和普通单聊一样出现在会话列表里（`peer.user_id` 为 `@cs`）。
-欢迎语、排队提示、坐席回复都以 `@cs` 身份到达；接待状态 `GET /api/imcs/v1/state`，评价 `POST /api/imcs/v1/sessions/{id}/rating`（`{id}` 即评价卡片里的 `session_id`），见接入文档 §10。
+欢迎语、排队提示、坐席回复都以 `@cs` 身份到达；接待状态 `GET /api/imcs/v1/state`，评价 `POST /api/imcs/v1/sessions/{id}/rating`（`{id}` 即评价卡片里的 `session_id`），见接入文档 §10。Flutter SDK 对应 `csState()` / `rateCs(sessionId, rating, {comment})`。

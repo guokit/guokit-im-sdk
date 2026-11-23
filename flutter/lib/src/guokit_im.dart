@@ -331,6 +331,28 @@ class GuokitIm {
     int? limit,
   }) => _call(() => _api.blocks(offset: offset, limit: limit));
 
+  // ---------------- 客服 ----------------
+
+  /// 当前客服接待状态，用于客服会话页顶部的「排队中，前面还有 N 位」状态条。
+  /// 服务端不推送，建议进入客服会话、收到 `@cs` 新消息时各刷新一次。站点没装客服时抛 [ImApiException]。
+  Future<ImCsState> csState() => _call(() {
+    _requireLogin();
+    return _api.csState();
+  });
+
+  /// 评价一次已结束的接待。[sessionId] 取评价邀请消息（`custom`，`content['data']['kind'] == 'imcs_rating'`）
+  /// 里的 `content['data']['session_id']`；[rating] 为 1–5，越界抛 [ArgumentError]；[comment] ≤200 字。
+  /// 重复评价、评别人的或未结束的接待抛 [ImApiException]（`VALIDATION`「无法评价」），可把卡片置为已评价。
+  Future<void> rateCs(int sessionId, int rating, {String? comment}) {
+    if (rating < 1 || rating > 5) {
+      throw ArgumentError.value(rating, 'rating', '评分须为 1–5');
+    }
+    return _call(() {
+      _requireLogin();
+      return _api.csRate(sessionId, rating, comment: comment);
+    });
+  }
+
   // ---------------- 发送 ----------------
   //
   // 都返回 `Future<ImMessage>`：本地「发送中」消息立即经 [onMessageUpdated] 发出，Future 在终态
@@ -480,7 +502,9 @@ class GuokitIm {
     if (_authRetries >= _maxAuthRetries) {
       // 缓存里还是刚被拒的令牌，丢掉它：否则再调 login 时 _connect 会拿它连、又收 3500，
       // 永远不再调 provider。别的请求已换过新令牌时缓存不等于 _rtToken，保留。
-      if (_rtToken != null && _tokens.cached?.token == _rtToken) _tokens.clear();
+      if (_rtToken != null && _tokens.cached?.token == _rtToken) {
+        _tokens.clear();
+      }
       _setState(ImConnectionState.disconnected);
       return;
     }

@@ -66,6 +66,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `resend(failed)` | 只能重发 `failed` 的消息，沿用原 `client_msg_id`，服务端幂等不会重复 |
 | `markRead(convId)` / `markAllRead()` | 标已读 / 一键清全部未读 |
 | `block / unblock / blocks` | 黑名单 |
+| `csState()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 评价一次已结束的接待，见下方常见问题 |
 | `imageUrl(msg)` | 返回可用的图片地址；上传图链接约 24 小时过期，SDK 会在快过期时重拉 |
 
 **发送结果**（`ImMessage.status` 与 `errorCode`）：
@@ -94,6 +95,11 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 - 连续换令牌后服务端仍判定令牌无效。
 
 这时 `onConnectionChanged` 会停在 disconnected，但不会收到 `onKickedOut`。请在网络恢复或 App 回到前台时再调一次 `login(userId)`，已登录同一用户时它只做重连。期间发出的消息会标 `failed`（`NETWORK`），可以重发。
+
+**平台客服的状态条和评价卡片怎么做？**
+客服就是对方为 `@cs` 的会话（`type` 为 `service`），收发与普通单聊相同。
+- 状态条：进入客服会话、收到 `@cs` 新消息时各调一次 `csState()`，`status == ImCsStatus.queued` 时显示「前面还有 `queuePosition - 1` 位」。服务端不推送状态变化
+- 评价卡片：消息满足 `type == 'custom' && content['data']['kind'] == 'imcs_rating'` 时渲染成 1–5 星卡片，提交调 `rateCs(content['data']['session_id'], rating, comment: …)`。评价成功，或抛 `ImApiException`（`code == 'VALIDATION'`，即「无法评价」：已评过或接待未结束）时，都把卡片置为「已评价」
 
 **图片显示不出来？**
 上传图的链接每次读取时现签，约 24 小时有效，不要长期保存链接。显示前调 `imageUrl(msg)`：快过期时 SDK 会重拉，并把新消息经 `onMessageUpdated` 发出。

@@ -417,3 +417,42 @@ class ImBlockItem {
   /// 拉黑时间（UTC）。
   final DateTime createdAt;
 }
+
+/// 客服接待状态（接入文档 §10.4）。
+enum ImCsStatus {
+  /// 当前没有进行中的咨询。
+  none,
+
+  /// 排队中。
+  queued,
+
+  /// 坐席接待中。
+  active,
+}
+
+/// `GET /api/imcs/v1/state` 的结果，用于客服会话页顶部的状态条。服务端不推送，按需刷新。
+class ImCsState {
+  const ImCsState({
+    required this.status,
+    required this.sessionId,
+    required this.queuePosition,
+  });
+
+  /// 不认识的 status 按 [ImCsStatus.none] 处理，服务端将来加状态时不至于解析失败。
+  factory ImCsState.fromServer(Map json) => ImCsState(
+    status: ImCsStatus.values.firstWhere(
+      (s) => s.name == json['status'],
+      orElse: () => ImCsStatus.none,
+    ),
+    sessionId: (json['session_id'] as num).toInt(),
+    queuePosition: (json['queue_position'] as num).toInt(),
+  );
+
+  final ImCsStatus status;
+
+  /// 当前这次接待的 id；[ImCsStatus.none] 时为 0。
+  final int sessionId;
+
+  /// 排队名次（含自己，排第一为 1）；非 [ImCsStatus.queued] 时为 0。
+  final int queuePosition;
+}
