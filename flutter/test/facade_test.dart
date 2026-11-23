@@ -176,4 +176,24 @@ void main() {
       expect((kicked, rt.connects), (1, 2));
     },
   );
+
+  test('3500 重试用完后再调 login(同一用户) 会重新取令牌并连上', () async {
+    await im.login('u1');
+    await settle();
+    rt.badTokens.addAll(['t1', 't2', 't3']);
+    rt.emit(const ImRealtimeDisconnected(3500, 'token'));
+    await settle();
+    expect((providerCalls, im.connectionState), (
+      3,
+      ImConnectionState.disconnected,
+    ));
+
+    await im.login('u1');
+    await settle();
+    expect(rt.tokens.last, 't4');
+    expect((providerCalls, im.connectionState), (
+      4,
+      ImConnectionState.connected,
+    ));
+  });
 }

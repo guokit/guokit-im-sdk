@@ -123,7 +123,10 @@ class GuokitIm {
   Future<void> login(String userId) async {
     if (_me != null && (_me != userId || _kicked)) await logout();
     if (_me == userId) {
-      if (_state == ImConnectionState.disconnected) await _connect();
+      if (_state == ImConnectionState.disconnected) {
+        _authRetries = 0; // App 主动重连，3500 重试次数重新算
+        await _connect();
+      }
       return;
     }
     _session++;
@@ -475,6 +478,9 @@ class GuokitIm {
   /// 3500：换令牌（单次）后 setToken + connect。3500 不触发 centrifuge 的 getToken，要手动做。
   Future<void> _reauth(int session) async {
     if (_authRetries >= _maxAuthRetries) {
+      // 缓存里还是刚被拒的令牌，丢掉它：否则再调 login 时 _connect 会拿它连、又收 3500，
+      // 永远不再调 provider。别的请求已换过新令牌时缓存不等于 _rtToken，保留。
+      if (_rtToken != null && _tokens.cached?.token == _rtToken) _tokens.clear();
       _setState(ImConnectionState.disconnected);
       return;
     }
