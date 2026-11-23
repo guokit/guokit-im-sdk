@@ -2,6 +2,14 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.3.0 — 2026-11-23
+
+只改了 Flutter SDK 与文档，PHP SDK 与 v0.1.0 相同。
+
+- **业务卡片**：接入文档新增 §5.9「业务卡片 `im_card`」——订单、商品、文章这类 custom 消息在 `data.im_card` 里带标准卡片外壳（`title` 必填；`kind`、`subtitle`、`image`、最多 6 行 `fields` 快照；链接按端分 `web_link` / `app_link` / `mp_path` + `mp_appid`），服务端发送时校验、不合规范整条拒收（`VALIDATION`）。OpenAPI 新增 `ImCard`
+- **Flutter**：新增 `ImCard` / `ImCardField` 模型与 `ImMessage.card`（非 custom、没带卡片或缺 `title` 时为 null）；`sendCustom` 不变，把 `im_card` 放进 `data` 即可。README 常见问题补「业务卡片怎么发、怎么显示」
+- Agent Skill 与 `llms.txt` 补业务卡片说明
+
 ## v0.2.0 — 2026-11-23
 
 只改了 Flutter SDK，PHP SDK 与 v0.1.0 相同。
