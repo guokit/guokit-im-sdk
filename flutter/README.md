@@ -133,7 +133,7 @@ await im.sendCustom('@cs', {
 ```
 
 - 链接按端取：网站、H5、客服工作台用 `web_link`（https）；原生 App 用 `app_link`；小程序用 `mp_path`，跳到别的小程序再加 `mp_appid`。小程序要打开 `web_link`，得先在小程序后台把域名配成「业务域名」
-- 收到时用 `msg.card`（`ImCard?`）渲染：不是 custom、没带卡片或卡片不合规范时为 null，退回显示 `desc`
+- 收到时用 `msg.card`（`ImCard?`）渲染：不是 custom、没带卡片或卡片缺 `title` 时为 null，退回显示 `desc`（格式由服务端发送时把关）
 - 卡片不合规范时服务端整条拒收，发送结果为 `failed` + `VALIDATION`，`errorMessage` 写明是哪个字段
 - `fields` 是发送那一刻的快照，不会随订单状态更新，最新状态以点开详情为准
 

@@ -165,7 +165,7 @@ class ImMessage {
   final DateTime? urlFetchedAt;
 
   /// 业务卡片（接入文档 §5.9）：custom 消息的 `content['data']['im_card']`；
-  /// 不是 custom、没带卡片或卡片不合规范时为 null，调用方退回显示 `desc`。
+  /// 不是 custom、没带卡片或卡片缺 `title` 时为 null，调用方退回显示 `desc`（格式由服务端发送时把关）。
   ImCard? get card =>
       type == 'custom' ? ImCard.tryParse(content['data']) : null;
 
