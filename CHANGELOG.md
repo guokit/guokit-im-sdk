@@ -2,6 +2,14 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.4.0 — 2026-11-23
+
+只改了 PHP SDK 与文档，Flutter SDK 与 v0.3.0 相同。
+
+- **PHP `onlineStatus(array $userIds)`**：批量查询在线状态（1–100 个），返回 `[user_id => bool]`；不存在、被封禁的用户为 false
+- **回调 `user_state`**：`CallbackEvent` 的事件名多了 `user_state`（用户上下线，IM 设置里打开才推）；README 写明不认识的事件也回 `Callback::ack()`
+- 接入文档新增 §4.8 查询在线状态、§8.4 `user_state` 回调；Agent Skill 与 `llms-full.txt` 同步
+
 ## v0.3.0 — 2026-11-23
 
 只改了 Flutter SDK 与文档，PHP SDK 与 v0.1.0 相同。
