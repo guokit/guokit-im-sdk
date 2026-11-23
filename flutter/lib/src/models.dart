@@ -164,6 +164,11 @@ class ImMessage {
   /// 其余消息为 null。
   final DateTime? urlFetchedAt;
 
+  /// 业务卡片（接入文档 §5.9）：custom 消息的 `content['data']['im_card']`；
+  /// 不是 custom、没带卡片或卡片不合规范时为 null，调用方退回显示 `desc`。
+  ImCard? get card =>
+      type == 'custom' ? ImCard.tryParse(content['data']) : null;
+
   /// 复制并替换部分字段。可空字段显式传 `null` 即清空（如重发前清掉 `errorCode`）。
   ImMessage copyWith({
     Object? id = _unset,
@@ -232,6 +237,100 @@ class ImMessage {
   String toString() =>
       'ImMessage(id: $id, cmid: $clientMsgId, conv: $conversationId, seq: $seq, '
       '$from→$to, $type, ${status.name}${errorCode == null ? '' : ' $errorCode'})';
+}
+
+/// 业务卡片 `custom.data.im_card` 的一行关键信息，是发送那一刻的快照。
+class ImCardField {
+  const ImCardField({required this.label, required this.value});
+
+  final String label;
+  final String value;
+}
+
+/// 业务卡片外壳（接入文档 §5.9）。发送时把同形状的 Map 放进 `sendCustom` 的
+/// `data['im_card']`，服务端校验；这里只负责解析，渲染由 App 自己做。
+///
+/// 各端取自己能用的链接：网站 / H5 用 [webLink]，原生 App 用 [appLink]，
+/// 小程序用 [mpPath]（[mpAppid] 不为空时跳到另一个小程序）。
+class ImCard {
+  const ImCard({
+    required this.title,
+    this.kind,
+    this.subtitle,
+    this.image,
+    this.fields = const [],
+    this.webLink,
+    this.appLink,
+    this.mpPath,
+    this.mpAppid,
+  });
+
+  /// 解析 custom 消息的 `content['data']`，取其中的 `im_card`。
+  ///
+  /// 没带卡片、`title` 不是非空字符串时返回 null；其余字段类型不对按缺省处理，
+  /// [fields] 只收 label、value 都是非空字符串的项。不抛错。
+  static ImCard? tryParse(Object? data) {
+    if (data is! Map) return null;
+    final c = data['im_card'];
+    if (c is! Map) return null;
+    final title = c['title'];
+    if (title is! String || title.trim().isEmpty) return null;
+    String? str(String key) {
+      final v = c[key];
+      return v is String && v.isNotEmpty ? v : null;
+    }
+
+    final fields = <ImCardField>[];
+    final raw = c['fields'];
+    if (raw is List) {
+      for (final f in raw) {
+        if (f is! Map) continue;
+        final label = f['label'];
+        final value = f['value'];
+        if (label is String &&
+            label.isNotEmpty &&
+            value is String &&
+            value.isNotEmpty) {
+          fields.add(ImCardField(label: label, value: value));
+        }
+      }
+    }
+    return ImCard(
+      title: title,
+      kind: str('kind'),
+      subtitle: str('subtitle'),
+      image: str('image'),
+      fields: fields,
+      webLink: str('web_link'),
+      appLink: str('app_link'),
+      mpPath: str('mp_path'),
+      mpAppid: str('mp_appid'),
+    );
+  }
+
+  final String title;
+
+  /// 推荐 `order` / `product` / `service` / `article` / `page`，只用来显示类型名和图标。
+  final String? kind;
+  final String? subtitle;
+
+  /// 封面或缩略图（https）。
+  final String? image;
+
+  /// 关键信息，发送那一刻的快照，最新状态以点开详情为准。
+  final List<ImCardField> fields;
+
+  /// 网站、H5、客服工作台用（https）。
+  final String? webLink;
+
+  /// 原生 App 内跳转用，例如 `djx://order/1`。
+  final String? appLink;
+
+  /// 小程序页面路径，例如 `/pages/order/detail?id=1`。
+  final String? mpPath;
+
+  /// 为空：跳本小程序内的 [mpPath]；不为空：跳到这个 AppID 的小程序。
+  final String? mpAppid;
 }
 
 /// 会话列表里的最后一条消息摘要（不是完整消息，服务端只给这几个字段）。

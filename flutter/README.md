@@ -114,6 +114,31 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 **自定义消息怎么发？**
 `sendCustom(to, data, desc)` 的 `data` 必须是 JSON 对象（Map），不能是字符串或数组。`desc` 用作会话预览和离线推送文字。
 
+**业务卡片（订单、商品这类）怎么发、怎么显示？**
+在 `sendCustom` 的 `data` 里带一个 `im_card` 对象，客服工作台和各端就能照同一份规范渲染成卡片：
+
+```dart
+await im.sendCustom('@cs', {
+  'order_id': 1,                          // 你自己的业务字段照旧放
+  'im_card': {
+    'kind': 'order',                      // order / product / service / article / page
+    'title': '订单 #20261123001',           // 唯一必填
+    'subtitle': '待发货',
+    'fields': [{'label': '金额', 'value': '¥99.00'}],   // 最多 6 行
+    'web_link': 'https://shop.example.com/order/1',
+    'app_link': 'myapp://order/1',
+    'mp_path': '/pages/order/detail?id=1',
+  },
+}, '[订单] 订单 #20261123001');            // desc 照旧必填，用于预览、推送和兜底
+```
+
+- 链接按端取：网站、H5、客服工作台用 `web_link`（https）；原生 App 用 `app_link`；小程序用 `mp_path`，跳到别的小程序再加 `mp_appid`。小程序要打开 `web_link`，得先在小程序后台把域名配成「业务域名」
+- 收到时用 `msg.card`（`ImCard?`）渲染：不是 custom、没带卡片或卡片不合规范时为 null，退回显示 `desc`
+- 卡片不合规范时服务端整条拒收，发送结果为 `failed` + `VALIDATION`，`errorMessage` 写明是哪个字段
+- `fields` 是发送那一刻的快照，不会随订单状态更新，最新状态以点开详情为准
+
+字段上限与完整规则见接入文档「§5.9 业务卡片」。
+
 **已知限制**
 - 对账翻会话列表时只比较 `max_seq`。离线期间在别的设备上标了已读、又不在列表首页的老会话，要等它下次来新消息时未读数才会对齐。
 - 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。
