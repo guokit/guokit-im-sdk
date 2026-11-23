@@ -146,7 +146,9 @@ class ImSender {
   }
 
   /// 图片可用地址：非图片 null；外链图原样返回；上传图链接为空或取得超过 [urlMaxAge] 时重拉这条消息，
-  /// 更新本地并发 `onMessageUpdated` 后返回新地址。重拉失败返回旧地址，不抛。未确认的图片返回 null。
+  /// 更新本地并发 `onMessageUpdated` 后返回新地址。重拉失败返回旧地址，不抛。
+  /// 未确认（发送中 / 失败）的上传图没有会话可重拉，返回上传时拿到的临时链接（约 24 小时有效）；
+  /// 按路径发的图在本机优先用 `localPath` 显示。
   Future<String?> imageUrl(ImMessage message) async {
     if (message.type != 'image') return null;
     final m =

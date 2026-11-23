@@ -15,7 +15,7 @@ dependencies:
     git:
       url: https://github.com/guokit/im-sdk.git
       path: flutter
-      ref: v0.4.0
+      ref: v0.4.1
 ```
 
 ## 上手
@@ -62,6 +62,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `conversations()` | 先返回本地快照，后台再对齐服务端 |
 | `messages(convId, {before, limit})` | 按 seq 升序；最新一页末尾会附上本设备还没发成功的消息 |
 | `conversationWith(peerId)` | 只查本地，见下方常见问题 |
+| `pendingTo(peerId)` | 发给对方的未确认消息（发送中 / 失败 / 被拒收），还没有会话时聊天页用它显示，失败的可重发 |
 | `sendText / sendImage(路径) / sendImageBytes(字节) / sendLocation / sendCustom` | 立即经 `onMessageUpdated` 发出「发送中」；Future 在终态完成，**不抛异常** |
 | `resend(failed)` | 只能重发 `failed` 的消息，沿用原 `client_msg_id`，服务端幂等不会重复 |
 | `markRead(convId)` / `markAllRead()` | 标已读 / 一键清全部未读 |
@@ -88,6 +89,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 **打开聊天页时还没有会话，对方的昵称头像从哪来？**
 IM 不提供查他人资料的接口，资料归你的业务系统，聊天页用自家接口展示。
 `conversationWith(peerId)` 只查本地，返回 null 不一定代表没有会话（也可能还没同步到）。直接发消息就行，服务端会自动建会话。
+还没有会话时，用 `pendingTo(peerId)` 取发给对方的发送中 / 失败消息显示出来；第一条就发失败的，可以在这里看到并 `resend`。
 
 **连不上、一直 disconnected？**
 网络断开这类情况由 SDK 自动重连，连上后会对账补拉。但下面两种情况 SDK **不会自己重试**：
@@ -103,6 +105,7 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 
 **图片显示不出来？**
 上传图的链接每次读取时现签，约 24 小时有效，不要长期保存链接。显示前调 `imageUrl(msg)`：快过期时 SDK 会重拉，并把新消息经 `onMessageUpdated` 发出。
+发送中 / 失败的上传图还没有会话可重拉，`imageUrl` 返回上传时的临时链接；按路径发的图在本机优先用 `msg.localPath` 显示。
 外链图（发送时只给了 `url`）原样返回，不会过期。
 
 **Web 端要注意什么？**

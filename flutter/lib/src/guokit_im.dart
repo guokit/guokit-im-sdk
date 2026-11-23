@@ -222,6 +222,16 @@ class GuokitIm {
     return _store.conversationByPeer(peerId);
   }
 
+  /// 发给 [peerId] 的未确认消息（发送中 / 失败 / 被拒收），按 `createdAt` 升序，只查本地。
+  ///
+  /// 会话建立前第一条消息就发失败时，[conversationWith] 为 null、[messages] 也取不到它；
+  /// 聊天页这时调本方法显示这些消息，并可对 failed 的调 [resend]（rejected 不能重发）。已有会话时 [messages] 的最新一页已经附带它们。
+  Future<List<ImMessage>> pendingTo(String peerId) async {
+    _requireLogin();
+    return (await _store.unconfirmedMessages(peerId))
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  }
+
   /// 按 seq 升序返回一页消息，本地优先，本地不连续或不足时从服务端补齐。
   ///
   /// - [before] 为空（或是未确认消息）：最新一页，末尾按 `createdAt` 追加发给该会话对方的未确认消息；
@@ -400,6 +410,7 @@ class GuokitIm {
 
   /// 图片可用地址：外链图原样返回；上传图链接过期（取得超过 20 小时或为空）时重拉这条消息，
   /// 更新本地并发 [onMessageUpdated] 后返回新地址；重拉失败返回旧地址。非图片返回 null。
+  /// 未确认（发送中 / 失败）的上传图返回上传时拿到的临时链接（约 24 小时有效），按路径发的图优先用 `localPath`。
   Future<String?> imageUrl(ImMessage message) =>
       _requireSender().imageUrl(message);
 

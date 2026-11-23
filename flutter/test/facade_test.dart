@@ -185,6 +185,25 @@ void main() {
     expect(requests.length, before);
   });
 
+  test('pendingTo：还没有会话时也能取到发给对方的失败消息，按时间升序', () async {
+    await im.login('u1');
+    ImMessage local(String c, int sec) => ImMessage(
+      clientMsgId: c,
+      from: 'u1',
+      to: 'u7',
+      isSelf: true,
+      type: 'text',
+      content: {'text': c},
+      status: ImMessageStatus.failed,
+      createdAt: DateTime.utc(2026, 11, 23, 10, 0, sec),
+    );
+    await store.upsertMessage(local('b', 2));
+    await store.upsertMessage(local('a', 1));
+    expect(await im.conversationWith('u7'), isNull);
+    expect((await im.pendingTo('u7')).map((m) => m.clientMsgId), ['a', 'b']);
+    expect(await im.pendingTo('u9'), isEmpty);
+  });
+
   test('3500 重试用完后再调 login(同一用户) 会重新取令牌并连上', () async {
     await im.login('u1');
     await settle();
