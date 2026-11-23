@@ -1,0 +1,20 @@
+# CHANGELOG
+
+两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
+
+## v0.2.0 — 2026-11-23
+
+只改了 Flutter SDK，PHP SDK 与 v0.1.0 相同。
+
+- **新增客服接口**：`csState()` 取平台客服的接待状态（`ImCsState`：状态、接待 id、排队名次），
+  `rateCs(sessionId, rating, {comment})` 评价一次已结束的接待。走 SDK 自管的令牌与 401 换令牌重试，
+  不必再在 `tokenProvider` 里自留令牌。评分不在 1–5、评语去首尾空白后超过 200 字直接抛 `ArgumentError`。
+  README 写明状态条与评价卡片的做法
+- **修复**：换令牌重试用完、停在 disconnected 后，再调 `login(同一用户)` 恢复不了（拿缓存里被拒的令牌反复连，
+  不再调 `tokenProvider`）。现在会重新取令牌并连上，与 README「再调一次 login 即重连」一致
+
+## v0.1.0 — 2026-11-21
+
+首个版本：接入文档、OpenAPI 3.1 规范、`llms.txt` 与 Agent Skill（`guokit-im`）；Flutter 客户端 SDK
+（令牌自动续、断线对账补拉、本地消息库、发送三态与重发、图片链接过期重拉）；PHP 服务端 SDK
+（用户、令牌、封禁、黑名单、代发、审计历史、回调验签）。
