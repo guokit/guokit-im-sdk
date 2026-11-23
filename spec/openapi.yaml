@@ -96,6 +96,55 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/im/v1/server/users/online:
+    post:
+      tags: [服务端]
+      operationId: serverOnlineUsers
+      summary: 查询在线状态
+      description: 每次 1–100 个，去重后按请求顺序返回。在线 = 该用户当前至少有一条长连接。不存在或被封禁的用户返回 `false`，不报错。这个接口是在线状态的权威来源，`user_state` 回调只是提醒。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids]
+              properties:
+                user_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+      responses:
+        '200':
+          description: 成功返回每个用户的在线状态；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  required: [user_id, online]
+                                  properties:
+                                    user_id: { type: string }
+                                    online: { type: boolean }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/im/v1/server/users/{user_id}:
     parameters:
       - $ref: '#/components/parameters/UserIdPath'

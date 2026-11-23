@@ -11,7 +11,7 @@
  ┌──────────────┐   REST（X-Api-Key）：导入用户 / 签令牌 / 封禁 / 代发 / 查历史   ┌──────────────┐
  │  接入方后端   │ ───────────────────────────────────────────────────────────▶ │              │
  │              │ ◀─────────────────────────────────────────────────────────── │   IM 服务端   │
- └──────┬───────┘   回调（签名）：before_send（同步） / after_send（异步）        │  （MySQL 为准）│
+ └──────┬───────┘   回调（签名）：before_send（同步） / after_send、user_state（异步）│  （MySQL 为准）│
         │ 登录时把用户令牌下发给 App                                            │              │
  ┌──────▼───────┐   HTTP 上行（Bearer 令牌）：发消息 / 会话 / 已读 / 上传        │              │
  │ 客户端 App/Web│ ───────────────────────────────────────────────────────────▶ │              │
@@ -92,6 +92,7 @@
 | PUT | `/users/{user_id}/blocks/{target}` | 拉黑 |
 | DELETE | `/users/{user_id}/blocks/{target}` | 解除拉黑 |
 | GET | `/users/{user_id}/blocks` | 黑名单列表 |
+| POST | `/users/online` | 批量查询在线状态 |
 
 ### 4.1 导入或更新用户 `PUT /users/{user_id}`
 
@@ -188,6 +189,26 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 ```
 
 `has_more` 为 `true` 时，把 `offset` 加上本页条数继续取下一页。
+
+### 4.8 查询在线状态 `POST /users/online`
+
+```json
+{ "user_ids": ["u1001", "u1002", "u9999"] }
+```
+
+返回（按请求顺序，重复的 id 只返回一次）：
+
+```json
+{ "items": [
+  { "user_id": "u1001", "online": true },
+  { "user_id": "u1002", "online": false },
+  { "user_id": "u9999", "online": false }
+] }
+```
+
+- 每次 1–100 个，`user_id` 规则同 §4.1；为空、超过 100 个或含不合法的 id → 400 `VALIDATION`。
+- **在线 = 该用户此刻至少有一条长连接**，与 after_send 的 `to_online` 同一口径。不存在、被封禁的用户都返回 `false`，不报错。
+- 这是在线状态的**权威来源**；上下线回调（§8.4）只是提醒。查到之后怎么展示（App 里的小绿点、是否允许用户隐藏在线状态等）由接入方决定。
 
 ## 5. 客户端接口（App / Web 调用）
 
@@ -479,14 +500,14 @@ Future<void> pullAfter(ImStore store, ImApi api, int convId, int afterSeq) async
 
 ## 8. 回调
 
-在「IM 设置」配置：回调地址（http/https，建议 https）、回调密钥（≤128 字符，**务必设置**）、是否开启发送前回调、发送前回调失败策略（放行 / 拒绝，默认放行）。
+在「IM 设置」配置：回调地址（http/https，建议 https）、回调密钥（≤128 字符，**务必设置**）、是否开启发送前回调、发送前回调失败策略（放行 / 拒绝，默认放行）、是否推送用户上下线（默认关闭，见 §8.4）。
 
 所有回调都是 `POST`，`Content-Type: application/json`，请求头：
 
 | 头 | 说明 |
 |---|---|
-| `X-Im-Event` | `before_send` / `after_send` |
-| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条 after_send 任务的每次重试**保持不变**，用于去重 |
+| `X-Im-Event` | `before_send` / `after_send` / `user_state` |
+| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / user_state）的每次重试**保持不变**，用于去重 |
 | `X-Im-Timestamp` | 发出时刻的 Unix 秒 |
 | `X-Im-Signature` | `hex(HMAC-SHA256(回调密钥, 时间戳 + "\n" + 原始请求体))` |
 
@@ -557,10 +578,37 @@ if ($payload['event'] === 'after_send') {
         queueOfflinePush($d['to'], $d['message']);           // 建议丢队列异步发，尽快返回
     }
     echo json_encode(['code' => 0]);
+    exit;
 }
+if ($payload['event'] === 'user_state') {                    // 打开「推送用户上下线」后才会收到，见 §8.4
+    $d = $payload['data'];
+    saveOnlineStateIfNewer($d['user_id'], $d['online'], $d['ts']);   // 按 ts 只保留最新状态
+}
+echo json_encode(['code' => 0]);                             // 不认识的事件也回 code 0，否则会被当成失败反复重试
 ```
 
 Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(...)` 取头。
+
+### 8.4 user_state（异步）
+
+- 时机：在「IM 设置」打开「推送用户上下线」且配了回调地址时，终端用户**上线**或**下线**各推一次。坐席连接不推。
+  - 上线：该用户从没有连接变为有连接时立即推。
+  - 下线：该用户的连接**全部断开 30 秒后仍未重连**才推。30 秒内重连（切网络、进电梯、App 短暂切后台）上线和下线都不推。
+- 投递与 after_send 相同：异步、签名、`X-Im-Delivery-Id` 去重、失败重试、可在后台回调记录里查看。
+- `data`：
+
+```json
+{ "user_id": "u1001", "online": false, "at": "2026-11-23 12:00:00", "ts": 1795392000123 }
+```
+
+`at` 为东八区时间；`ts` 为毫秒时间戳，用来判断先后。
+
+**按「状态」处理，不要按「切换」处理**：
+
+- 回调只是提醒，**以 §4.8 查询为准**。失败重试可能让上线、下线乱序到达，收到时与你存的 `ts` 比较，旧的直接丢弃。
+- **IM 服务重启时不补发下线**：重启前在线的用户收不到下线回调，重连后会再收到一次上线。需要准确状态时调 §4.8 查询。
+- 下线回调比实际断开晚约 30 秒，再加投递耗时。
+- 开关中途打开：打开前已在线的用户不补发上线，但他们断开时照样会推下线。开关关闭后，已经排队的回调照常投递。
 
 ## 9. 限制与配额
 
@@ -575,7 +623,9 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 拉消息 | 每页默认 30、最大 100 |
 | 令牌有效期 | 默认 168 小时，可配 1–8760 小时 |
 | before_send | 超时 2 秒，不重试 |
-| after_send | 每分钟投递一轮、每轮最多 100 条；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
+| after_send / user_state | 每分钟投递一轮、每轮最多 100 条；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
+| 查询在线状态 | 每次 1–100 个 user_id |
+| 下线判定 | 连接全部断开 30 秒后仍未重连才算下线并推 user_state |
 | Origin 白名单 | 最多 20 个 |
 | 消息保留 | 永久保留 |
 
