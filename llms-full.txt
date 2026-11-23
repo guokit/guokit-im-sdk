@@ -540,15 +540,16 @@ Future<void> pullAfter(ImStore store, ImApi api, int convId, int afterSeq) async
 - `data`：
 
   ```json
-  { "message": { 消息对象 }, "conversation_id": 12, "to": "u1002", "to_online": false }
+  { "message": { 消息对象 }, "conversation_id": 12, "to": "u1002", "to_online": false, "to_unread_total": 3 }
   ```
 
   `to_online` 表示发送时接收方是否至少有一条长连接。上传图的 `message.content.url` 约 24 小时有效。
+  `to_unread_total` 是接收方此刻所有会话的未读之和（**已含这条消息**），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
 - 成功判定：HTTP 200 且响应体 `{"code": 0}`（`code` 为数字）。
 - 失败重试：单次超时 5 秒；第 1 次失败后约 1 分钟重试，第 2 次失败后约 5 分钟重试，第 3 次失败标记为失败、不再自动重试，可在「回调记录」手动重投（重投保持原投递 id）。实际时刻按分钟对齐。
 - 请**先落库去重再处理**：以 `X-Im-Delivery-Id` 建唯一键，见过的直接回 `{"code":0}`。
 
-**离线推送建议**：`to_online === false` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`）。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
+**离线推送建议**：`to_online === false` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
 
 ### 8.3 验签（PHP）
 
