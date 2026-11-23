@@ -226,7 +226,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 | `image`（上传图） | `{"attachment_id", "ticket", "width", "height"}` | `attachment_id`、`ticket` 来自 `/upload`，且必须是**发送者本人**上传的；宽高为 1–20000 的整数 |
 | `image`（外链图） | `{"url", "width", "height"}` | `url` 为 https 链接，≤1024 字符，原样存取；宽高同上 |
 | `location` | `{"lat", "lng", "name", "address"}` | `lat` ∈ [-90, 90]、`lng` ∈ [-180, 180]，必填；`name` ≤100 字、`address` ≤200 字 |
-| `custom` | `{"data", "desc"}` | `data` 必须是 JSON **对象**，压缩序列化后 ≤8KB；`desc` 必填，1–100 字，用于会话预览与离线推送文字 |
+| `custom` | `{"data", "desc"}` | `data` 必须是 JSON **对象**，压缩序列化后 ≤8KB；`desc` 必填，1–100 字，用于会话预览与离线推送文字。订单、商品这类业务卡片可在 `data.im_card` 里带标准卡片外壳，见 §5.9 |
 
 图片两种形式**二选一**，同时传 `attachment_id` 与 `url` 会被拒。
 收到的上传图消息 content 为 `{"attachment_id", "width", "height", "url"}`：`url` 是**每次读取时现签**的临时链接（约 24 小时有效），不要长期保存；本地按 `attachment_id` 缓存图片，链接过期就重新拉一次该消息拿新链接。外链图原样返回 `{"url", "width", "height"}`。
@@ -301,6 +301,79 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 无请求体。把该用户所有会话（含客服会话）的已读位置推到各自最新一条，返回 `{"updated": 3}`，`updated` 是本次实际变更的会话数（没有未读时为 `0`）。
 `updated > 0` 时会向自己所有在线设备（含发起这次请求的设备）推**一条** `read_all` 事件（§6），不会逐会话推 `read`。
+
+### 5.9 业务卡片 `im_card`
+
+订单、商品、服务、文章这类「点开是一个详情页」的消息，都用 `custom` 发。IM 不认识你的业务数据，
+所以约定一个**通用卡片外壳**：放在 `custom.data.im_card` 里，各端照这份规范渲染。站点的客服工作台、
+后台消息查询都按它画卡片；不带 `im_card` 的 custom 消息仍只显示 `desc`。
+
+`data` 里的其他字段照旧归你自己用（例如你自己的卡片协议），`im_card` 是 `data` 里的**保留键名**；
+`desc` 照旧必填，用于会话预览、离线推送，以及不认识卡片的客户端的兜底显示。
+
+```json
+{
+  "to": "u1002",
+  "type": "custom",
+  "client_msg_id": "c-20261123-001",
+  "content": {
+    "desc": "[订单] 有机大米 5kg × 2",
+    "data": {
+      "im_card": {
+        "kind": "order",
+        "title": "有机大米 5kg × 2",
+        "subtitle": "云仓自营",
+        "image": "https://cdn.example.com/p/123.jpg",
+        "fields": [
+          { "label": "订单号", "value": "DJX20261123001" },
+          { "label": "状态", "value": "待发货" },
+          { "label": "实付", "value": "¥128.00" }
+        ],
+        "web_link": "https://shop.example.com/orders/1",
+        "app_link": "example://order/1",
+        "mp_path": "/pages/order/detail?id=1"
+      }
+    }
+  }
+}
+```
+
+| 字段 | 必填 | 规则 | 用途 |
+|---|---|---|---|
+| `title` | 是 | 去首尾空白后 1–64 字 | 卡片标题 |
+| `kind` | 否 | ≤20 字符 | 推荐 `order` / `product` / `service` / `article` / `page`，只用于显示类型名与图标；其他值显示为「链接」 |
+| `subtitle` | 否 | ≤100 字 | 副标题 |
+| `image` | 否 | https，≤1024 字符 | 封面 / 缩略图 |
+| `fields` | 否 | 数组，最多 6 行；每行 `{"label", "value"}`，label 1–10 字、value 1–64 字 | 关键信息，**发送那一刻的快照** |
+| `web_link` | 否 | https，≤1024 字符 | 浏览器打开：网站、H5、站点客服工作台 |
+| `app_link` | 否 | ≤1024 字符，不含空白，scheme 不限 | 原生 App 内跳转 |
+| `mp_path` | 否 | 以 `/` 开头，≤512 字符，不含空白 | 小程序页面路径 |
+| `mp_appid` | 否 | ≤32 个字母或数字；带了 `mp_path` 才能填 | 不填跳本小程序；填了跳到另一个小程序 |
+
+- `data` 里出现 `im_card` 键就必须是 JSON 对象（`null` 也不行）；卡片里的可选字段写成 `null` 或空串，视为没带；上表以外的键原样保存，渲染方忽略（为以后加字段留余地）。
+- 不合规范**整条消息拒收**：400 `VALIDATION`，`message` 写明字段，例如 `custom.data.im_card.title 须为 1–64 字`。客户端发送（§5.1）与服务端代发（§4.5）同样校验。
+- 服务端只校验格式与长度，**不判断链接能不能打开**。
+
+**各端用哪个链接**：一张卡片可以三种都带，各端取自己能用的。
+
+| 端 | 用 | 说明 |
+|---|---|---|
+| 网站 / H5 / 站点客服工作台 | `web_link` | 浏览器新窗口打开 |
+| 原生 App | `app_link` | 自定义 scheme 或通用链接 |
+| 微信小程序 | `mp_path`（+ `mp_appid`） | 本小程序内 `navigateTo`；带 `mp_appid` 时跳另一个小程序。小程序要打开 `web_link` 得用 web-view，且该域名须先在小程序后台配成「业务域名」（仅企业主体可配），否则打不开 |
+
+**链接打不开时**：
+
+- **关键信息放进 `fields`**。坐席和用户即使打不开链接，也知道说的是哪一单；工作台上注明「发送时信息」，点一下值即可复制（例如复制订单号去你的后台查）。最新状态以点开详情为准。
+- **客服工作台只用 `web_link`**。没有 `web_link` 时显示「请在用户端查看」。`web_link` 若指向需要登录的后台页，坐席要在那边有账号和权限；登录、无权限、对象已删除由你的页面自己处理。
+- **留意域名**。卡片可能是用户从客户端发出的，工作台会在「打开详情」旁显示链接域名，请坐席只点自家域名的链接。
+- 卡片里的手机号、收货地址等个人信息建议在发送端脱敏：卡片快照会永久保存在消息里，坐席、后台查询与回调接收方都能看到。
+
+**示例**：
+
+- 商品：`{"kind": "product", "title": "有机大米 5kg", "image": "https://…", "fields": [{"label": "价格", "value": "¥64.00"}], "web_link": "https://shop.example.com/p/123", "mp_path": "/pages/product/detail?id=123"}`
+- 普通页面（文章 / 活动）：`{"kind": "article", "title": "双 11 活动说明", "subtitle": "11 月 1 日–11 日", "web_link": "https://www.example.com/news/88"}`
+- 已有自己卡片协议的（如 `{"schema": "djx_card", "type": "order", "payload": {…}}`）：协议原样保留，在同一个 `data` 里**加一个** `im_card` 键即可，自家 App 继续按自己的协议渲染，客服工作台按 `im_card` 渲染。
 
 ## 6. 长连接
 
@@ -496,7 +569,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 接入应用调用服务端接口 | 每应用每分钟 600 次、每天 200000 次（进程内计数，按自然分钟 / 自然日清零），超出回 `IM_RATE_LIMITED` |
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
 | 用户资料 | user_id `[A-Za-z0-9_-]{1,64}`；昵称 ≤64 字；头像 ≤512 字符；批量每批 1–100 个 |
-| 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等）；上传图片默认 ≤8MB |
+| 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB |
 | 会话列表 | 每页默认 20、最大 50 |
 | 黑名单列表 | 每页默认 50、最大 200 |
 | 拉消息 | 每页默认 30、最大 100 |

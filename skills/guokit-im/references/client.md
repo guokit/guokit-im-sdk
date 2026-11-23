@@ -152,3 +152,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 站点装了客服模块时，`to: "@cs"` 就是给平台客服发消息，客服会话和普通单聊一样出现在会话列表里（`peer.user_id` 为 `@cs`）。
 欢迎语、排队提示、坐席回复都以 `@cs` 身份到达；接待状态 `GET /api/imcs/v1/state`，评价 `POST /api/imcs/v1/sessions/{id}/rating`（`{id}` 即评价卡片里的 `session_id`），见接入文档 §10。Flutter SDK 对应 `csState()` / `rateCs(sessionId, rating, {comment})`。
+
+## 7. 业务卡片
+
+订单、商品、文章这类「点开是详情页」的消息用 `custom` 发，并在 `data.im_card` 里带标准卡片外壳：`title` 必填，`kind`、`subtitle`、`image`、`fields`（最多 6 行发送时快照）可选，链接按端分 `web_link`（https，网页与客服工作台）、`app_link`（App 内跳转）、`mp_path` + 可选 `mp_appid`（小程序）。不合规范整条拒收（`VALIDATION`）。自家已有卡片协议的，在同一个 `data` 里加 `im_card` 键即可。Flutter SDK 收到时用 `msg.card` 解析。详见接入文档 §5.9。

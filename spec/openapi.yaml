@@ -1047,12 +1047,43 @@ components:
       properties:
         data:
           type: object
-          description: 必须是 JSON 对象，压缩序列化后 ≤8KB
+          description: 必须是 JSON 对象，压缩序列化后 ≤8KB（含 im_card）。其余键归接入方自用；im_card 是保留键，见接入文档 §5.9
+          additionalProperties: true
+          properties:
+            im_card: { $ref: '#/components/schemas/ImCard' }
         desc:
           type: string
           minLength: 1
           maxLength: 100
           description: 1–100 字，用于会话预览与离线推送文字
+
+    ImCard:
+      type: object
+      title: im_card
+      description: |
+        业务卡片通用外壳（接入文档 §5.9）。键存在就必须是对象；不合规范整条消息回 400 `VALIDATION`。
+        未列出的键原样保存、渲染方忽略。服务端只校验格式与长度，不判断链接能否打开。
+      required: [title]
+      additionalProperties: true
+      properties:
+        title: { type: string, minLength: 1, maxLength: 64, description: 去首尾空白后 1–64 字 }
+        kind: { type: string, maxLength: 20, description: 推荐 order / product / service / article / page，只用于显示类型名；其他值显示为「链接」 }
+        subtitle: { type: string, maxLength: 100, description: ≤100 字 }
+        image: { type: string, format: uri, maxLength: 1024, description: https 链接 }
+        fields:
+          type: array
+          maxItems: 6
+          description: 关键信息，发送时快照
+          items:
+            type: object
+            required: [label, value]
+            properties:
+              label: { type: string, minLength: 1, maxLength: 10 }
+              value: { type: string, minLength: 1, maxLength: 64 }
+        web_link: { type: string, format: uri, maxLength: 1024, description: https；网站 / H5 / 客服工作台打开 }
+        app_link: { type: string, maxLength: 1024, description: 原生 App 内跳转，不含空白，scheme 不限 }
+        mp_path: { type: string, maxLength: 512, pattern: '^/\S*$', description: 小程序页面路径，以 / 开头、不含空白 }
+        mp_appid: { type: string, maxLength: 32, pattern: '^[A-Za-z0-9]+$', description: 跳另一个小程序时填；只有带了 mp_path 才能填 }
 
     SendMessageRequest:
       type: object
