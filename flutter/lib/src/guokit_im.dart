@@ -341,11 +341,15 @@ class GuokitIm {
   });
 
   /// 评价一次已结束的接待。[sessionId] 取评价邀请消息（`custom`，`content['data']['kind'] == 'imcs_rating'`）
-  /// 里的 `content['data']['session_id']`；[rating] 为 1–5，越界抛 [ArgumentError]；[comment] ≤200 字。
+  /// 里的 `content['data']['session_id']`；[rating] 为 1–5、[comment] 去首尾空白后 ≤200 字，不满足抛 [ArgumentError]。
   /// 重复评价、评别人的或未结束的接待抛 [ImApiException]（`VALIDATION`「无法评价」），可把卡片置为已评价。
+  /// 评语长度在这里先拦：服务端超长同样回 `VALIDATION`，不拦的话接入方会把没存上的评价当成已评价。
   Future<void> rateCs(int sessionId, int rating, {String? comment}) {
     if (rating < 1 || rating > 5) {
       throw ArgumentError.value(rating, 'rating', '评分须为 1–5');
+    }
+    if (comment != null && comment.trim().runes.length > 200) {
+      throw ArgumentError.value(comment, 'comment', '评语不能超过 200 字');
     }
     return _call(() {
       _requireLogin();

@@ -99,7 +99,7 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 **平台客服的状态条和评价卡片怎么做？**
 客服就是对方为 `@cs` 的会话（`type` 为 `service`），收发与普通单聊相同。
 - 状态条：进入客服会话、收到 `@cs` 新消息时各调一次 `csState()`，`status == ImCsStatus.queued` 时显示「前面还有 `queuePosition - 1` 位」。服务端不推送状态变化
-- 评价卡片：消息满足 `type == 'custom' && content['data']['kind'] == 'imcs_rating'` 时渲染成 1–5 星卡片，提交调 `rateCs(content['data']['session_id'], rating, comment: …)`。评价成功，或抛 `ImApiException`（`code == 'VALIDATION'`，即「无法评价」：已评过或接待未结束）时，都把卡片置为「已评价」
+- 评价卡片：消息满足 `type == 'custom' && content['data']['kind'] == 'imcs_rating'` 时渲染成 1–5 星卡片，提交调 `rateCs((content['data']['session_id'] as num).toInt(), rating, comment: …)`；评分越界或评语超过 200 字时 SDK 直接抛 `ArgumentError`，请在输入框限住字数。评价成功，或抛 `ImApiException`（`code == 'VALIDATION'`，即「无法评价」：已评过或接待未结束）时，都把卡片置为「已评价」
 
 **图片显示不出来？**
 上传图的链接每次读取时现签，约 24 小时有效，不要长期保存链接。显示前调 `imageUrl(msg)`：快过期时 SDK 会重拉，并把新消息经 `onMessageUpdated` 发出。

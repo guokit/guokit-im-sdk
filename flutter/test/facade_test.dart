@@ -177,6 +177,14 @@ void main() {
     },
   );
 
+  test('rateCs 评分越界、评语超 200 字直接抛 ArgumentError，不发请求', () async {
+    await im.login('u1');
+    final before = requests.length;
+    expect(() => im.rateCs(1, 6), throwsArgumentError);
+    expect(() => im.rateCs(1, 5, comment: '字' * 201), throwsArgumentError);
+    expect(requests.length, before);
+  });
+
   test('3500 重试用完后再调 login(同一用户) 会重新取令牌并连上', () async {
     await im.login('u1');
     await settle();
