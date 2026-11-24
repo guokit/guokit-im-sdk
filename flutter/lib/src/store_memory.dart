@@ -11,12 +11,25 @@ import 'store.dart';
 class _Data {
   final Map<int, ImConversation> conversations = {};
   final Map<int, int> synced = {};
+  String? changesCursor;
 
   /// local_id → 消息，local_id 自增，即插入顺序。
   final Map<int, ImMessage> messages = {};
   final Map<int, int> byId = {};
   final Map<String, int> byCid = {};
   int nextLocalId = 1;
+
+  void removeMessages(bool Function(ImMessage) test) {
+    final ids = [
+      for (final e in messages.entries)
+        if (test(e.value)) e.key,
+    ];
+    for (final l in ids) {
+      final m = messages.remove(l)!;
+      if (m.id != null) byId.remove(m.id);
+      byCid.remove(_cidKey(m.from, m.clientMsgId));
+    }
+  }
 }
 
 String _cidKey(String from, String cid) => '$from\u0000$cid';
@@ -75,6 +88,10 @@ class MemoryImStore implements ImStore {
   Future<List<ImConversation>> listConversations() async {
     final list = _d.conversations.values.toList()
       ..sort((a, b) {
+        final pa = a.pinnedAt, pb = b.pinnedAt;
+        if ((pa == null) != (pb == null)) return pa == null ? 1 : -1;
+        final p = pa == null ? 0 : pb!.compareTo(pa);
+        if (p != 0) return p;
         final t = b.lastMsgAt.compareTo(a.lastMsgAt);
         return t != 0 ? t : b.id.compareTo(a.id);
       });
@@ -99,8 +116,45 @@ class MemoryImStore implements ImStore {
   }
 
   @override
-  Future<int> totalUnread() async =>
-      _d.conversations.values.fold<int>(0, (s, c) => s + c.unread);
+  Future<int> totalUnread() async => _d.conversations.values.fold<int>(
+    0,
+    (s, c) => c.muted ? s : s + c.unread,
+  );
+
+  @override
+  Future<void> clearMessages(int conversationId, int clearSeq) async {
+    final d = _d;
+    final c = d.conversations[conversationId];
+    if (c == null || clearSeq <= c.clearSeq) return;
+    d.conversations[conversationId] = clearedConversation(c, clearSeq);
+    d.removeMessages(
+      (m) =>
+          m.conversationId == conversationId &&
+          m.seq != null &&
+          m.seq! <= clearSeq,
+    );
+    final synced = d.synced[conversationId] ?? 0;
+    await setSyncedSeq(conversationId, math.max(synced, clearSeq));
+  }
+
+  @override
+  Future<void> deleteConversation(int conversationId) async {
+    final d = _d;
+    final peer = d.conversations.remove(conversationId)?.peer.userId;
+    d.synced.remove(conversationId);
+    d.removeMessages(
+      (m) =>
+          m.conversationId == conversationId ||
+          (m.seq == null && m.isSelf && m.to == peer),
+    );
+  }
+
+  @override
+  Future<String?> changesCursor() async => _d.changesCursor;
+
+  @override
+  Future<void> setChangesCursor(String cursor) async =>
+      _d.changesCursor = cursor;
 
   @override
   Future<int> syncedSeq(int conversationId) async =>
@@ -129,6 +183,14 @@ class MemoryImStore implements ImStore {
     final merged = inserted
         ? message
         : mergeMessage(d.messages[localId]!, message);
+    if (isConfirmed(merged) &&
+        merged.seq! <=
+            (d.conversations[merged.conversationId]?.clearSeq ?? 0)) {
+      d.removeMessages(
+        (m) => m.from == merged.from && m.clientMsgId == merged.clientMsgId,
+      );
+      return (message: merged, inserted: false);
+    }
     localId ??= d.nextLocalId++;
 
     d.messages[localId] = merged;

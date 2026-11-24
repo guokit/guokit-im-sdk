@@ -87,7 +87,7 @@ class GuokitIm {
   /// 当前登录用户，未登录为 null。
   String? get currentUserId => _me;
 
-  /// 当前总未读（各会话 `maxSeq − readSeq` 之和）。
+  /// 当前总未读（各非免打扰会话 `maxSeq − readSeq` 之和）。
   int get totalUnread => _totalUnread;
 
   ImConnectionState get connectionState => _state;
@@ -98,7 +98,7 @@ class GuokitIm {
   /// 本地消息变化：发送中 → 成功 / 失败 / 被拒收；图片换新链接。
   Stream<ImMessage> get onMessageUpdated => _messageUpdated.stream;
 
-  /// 会话列表快照（按最后消息时间倒序）。
+  /// 会话列表快照：置顶会话在前（按置顶时间倒序），其余按最后消息时间倒序。
   Stream<List<ImConversation>> get onConversationsChanged =>
       _conversations.stream;
 
@@ -245,15 +245,18 @@ class GuokitIm {
     _requireLogin();
     final sync = _sync!;
     final beforeSeq = before?.seq;
+    // 清空记录后，能看到的第一条是 clearSeq + 1。
+    final conv = await _store.getConversation(conversationId);
+    final firstSeq = (conv?.clearSeq ?? 0) + 1;
 
     if (beforeSeq != null) {
-      if (beforeSeq <= 1) return <ImMessage>[];
+      if (beforeSeq <= firstSeq) return <ImMessage>[];
       var local = await _store.messages(
         conversationId,
         beforeSeq: beforeSeq,
         limit: limit,
       );
-      if (!_complete(local, limit, beforeSeq: beforeSeq)) {
+      if (!_complete(local, limit, firstSeq, beforeSeq: beforeSeq)) {
         final r = await _api.messages(
           conversationId,
           beforeSeq: beforeSeq,
@@ -282,7 +285,6 @@ class GuokitIm {
       }
     }
 
-    final conv = await _store.getConversation(conversationId);
     final synced = await _store.syncedSeq(conversationId);
     if (synced == 0) {
       await fetchLatest();
@@ -290,7 +292,7 @@ class GuokitIm {
       await sync.pullAfter(conversationId, synced, notify: false);
     }
     var local = await _store.messages(conversationId, limit: limit);
-    if (!fetched && !_complete(local, limit)) {
+    if (!fetched && !_complete(local, limit, firstSeq)) {
       await fetchLatest();
       local = await _store.messages(conversationId, limit: limit);
     }
@@ -304,14 +306,19 @@ class GuokitIm {
     return [...local, ...pending];
   });
 
-  /// 本地这一页是否可直接用：seq 连续，条数够或已到第 1 条，翻历史时还要紧接 [beforeSeq]。
-  static bool _complete(List<ImMessage> l, int limit, {int? beforeSeq}) {
+  /// 本地这一页是否可直接用：seq 连续，条数够或已到能看到的第一条 [firstSeq]，翻历史时还要紧接 [beforeSeq]。
+  static bool _complete(
+    List<ImMessage> l,
+    int limit,
+    int firstSeq, {
+    int? beforeSeq,
+  }) {
     if (l.isEmpty) return false;
     for (var i = 1; i < l.length; i++) {
       if (l[i].seq != l[i - 1].seq! + 1) return false;
     }
     if (beforeSeq != null && l.last.seq != beforeSeq - 1) return false;
-    return l.length >= limit || l.first.seq == 1;
+    return l.length >= limit || l.first.seq! <= firstSeq;
   }
 
   /// 标已读到该会话当前最大 seq，更新服务端并即时更新本地未读。
@@ -331,6 +338,33 @@ class GuokitIm {
     await _store.markAllRead();
     await _emitSnapshot();
   });
+
+  /// 置顶 / 取消置顶。超过 50 个、或会话不在列表里（已删除）时抛 [ImApiException]。多端同步。
+  Future<void> setPinned(int conversationId, bool pinned) => _change(
+    () => _api.setConversationSettings(conversationId, pinned: pinned),
+  );
+
+  /// 开 / 关免打扰：会话自己的 `unread` 照常计数，但不计入总未读。多端同步。
+  Future<void> setMuted(int conversationId, bool muted) =>
+      _change(() => _api.setConversationSettings(conversationId, muted: muted));
+
+  /// 清空本人这一侧的记录：会话留在列表原位，预览为 null、未读为 0。对方与服务端的记录不受影响。
+  /// 本设备还没发成功的消息（发送中 / 失败）不清。
+  Future<void> clearConversation(int conversationId) =>
+      _change(() => _api.clearConversation(conversationId));
+
+  /// 删除会话：从列表消失，并清空本人这一侧的记录（含本设备没发成功的消息）。之后有新消息时会话会重新出现，
+  /// 只能看到新消息；客服会话在坐席回复、欢迎语、转接提示、接待超时提示、评价邀请时也会这样重新出现。免打扰设置保留。
+  Future<void> deleteConversation(int conversationId) =>
+      _change(() => _api.deleteConversation(conversationId));
+
+  /// 调会话设置写接口，返回的设置进同步队列应用到本地（顺带推快照）。
+  Future<void> _change(Future<Map<String, dynamic>> Function() request) =>
+      _call(() async {
+        _requireLogin();
+        final sync = _sync!;
+        await sync.applySettings(await request());
+      });
 
   Future<void> block(String userId) => _call(() => _api.block(userId));
 

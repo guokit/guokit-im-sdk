@@ -2,6 +2,15 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.5.0 — 2026-11-24
+
+会话置顶、免打扰、清空记录、删除会话（都只影响本人，多端同步）。需要 IM 服务端支持会话设置接口（bf-go 下一版），旧服务端上新方法抛 `ImApiException`，其余功能不受影响。
+
+- **Flutter**：新增 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`；`ImConversation` 加 `pinnedAt` / `pinned` / `muted` / `clearSeq`；会话快照置顶在前；总未读不计免打扰会话；处理 `conversation_changed` 推送，对账时调 `GET /conversations/changes` 补齐离线期间别的设备的改动；清空 / 删除后旧消息不再补拉、不复现。本地库 v1 → v2 自动升级
+- **不兼容**：自己实现 `ImStore`（桌面端注入）的要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并按接口注释更新会话合并、排序、总未读规则
+- **PHP**：新增 `conversationSettings` / `setConversationSettings` / `clearConversation` / `deleteConversation`（按对方定位，客服会话对方写 `@cs`）；README 演示 after_send 的 `to_muted`（为 true 时不推离线）
+- 接入文档新增 §4.9 服务端会话设置、§5.10 / §5.11 客户端接口；after_send 加 `to_muted`，`to_unread_total` 与 `/unread` 不计免打扰会话；Skill、`llms-full.txt` 同步
+
 ## v0.4.1 — 2026-11-23
 
 首个接入方（大景象）实读 v0.1.0 源码时提的 4 处，PHP SDK 代码不变。

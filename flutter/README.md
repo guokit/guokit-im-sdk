@@ -15,7 +15,7 @@ dependencies:
     git:
       url: https://github.com/guokit/im-sdk.git
       path: flutter
-      ref: v0.4.1
+      ref: v0.5.0
 ```
 
 ## 上手
@@ -57,7 +57,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `currentUserId` / `totalUnread` / `connectionState` | 同步取值 |
 | `onNewMessage` | 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的不走这里 |
 | `onMessageUpdated` | 本设备消息状态变化（发送中 → 成功 / 失败 / 被拒收）、图片换新链接 |
-| `onConversationsChanged` / `onTotalUnreadChanged` | 会话快照（按最后消息时间倒序）/ 总未读（登录后先推一次本地值） |
+| `onConversationsChanged` / `onTotalUnreadChanged` | 会话快照（置顶在前，其余按最后消息时间倒序）/ 总未读（不计免打扰会话，登录后先推一次本地值） |
 | `onConnectionChanged` / `onKickedOut` | 连接状态 / 被封禁或踢下线 |
 | `conversations()` | 先返回本地快照，后台再对齐服务端 |
 | `messages(convId, {before, limit})` | 按 seq 升序；最新一页末尾会附上本设备还没发成功的消息 |
@@ -66,6 +66,8 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `sendText / sendImage(路径) / sendImageBytes(字节) / sendLocation / sendCustom` | 立即经 `onMessageUpdated` 发出「发送中」；Future 在终态完成，**不抛异常** |
 | `resend(failed)` | 只能重发 `failed` 的消息，沿用原 `client_msg_id`，服务端幂等不会重复 |
 | `markRead(convId)` / `markAllRead()` | 标已读 / 一键清全部未读 |
+| `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
+| `clearConversation(convId)` / `deleteConversation(convId)` | 清空本人这一侧的记录 / 删除会话（同时清空），见下方常见问题 |
 | `block / unblock / blocks` | 黑名单 |
 | `csState()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 评价一次已结束的接待，见下方常见问题 |
 | `imageUrl(msg)` | 返回可用的图片地址；上传图链接约 24 小时过期，SDK 会在快过期时重拉 |
@@ -97,6 +99,12 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 - 连续换令牌后服务端仍判定令牌无效。
 
 这时 `onConnectionChanged` 会停在 disconnected，但不会收到 `onKickedOut`。请在网络恢复或 App 回到前台时再调一次 `login(userId)`，已登录同一用户时它只做重连。期间发出的消息会标 `failed`（`NETWORK`），可以重发。
+
+**置顶、免打扰、清空、删除会话怎么用？**
+都只影响本人，对方不知道；在一台设备上改，其他设备通过推送和对账同步。需要 IM 服务端支持会话设置接口，旧版服务端上调这四个方法会抛 `ImApiException`。
+- 免打扰：`ImConversation.muted` 为 true，`unread` 照常计数（可显示成小红点），但不计入 `totalUnread`
+- 清空：会话留在原位，`lastMessage` 为 null、未读为 0；本设备还没发成功的消息（发送中 / 失败）仍在
+- 删除：会话从列表消失，历史一并清空，免打扰保留。之后有新消息时会话自动重新出现，只能看到新消息。客服会话在坐席回复、欢迎语、转接提示、接待超时提示、评价邀请时也会重新出现
 
 **平台客服的状态条和评价卡片怎么做？**
 客服就是对方为 `@cs` 的会话（`type` 为 `service`），收发与普通单聊相同。
@@ -144,4 +152,5 @@ await im.sendCustom('@cs', {
 
 **已知限制**
 - 对账翻会话列表时只比较 `max_seq`。离线期间在别的设备上标了已读、又不在列表首页的老会话，要等它下次来新消息时未读数才会对齐。
-- 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。
+- 已删除的会话（或全新的会话）收到新消息时，SDK 会拉一次会话列表首页取对方资料（首页 = 全部置顶 + 最新的一页非置顶，刚来消息的会话必在其中）。如果这次请求失败，会先显示成昵称和头像为空、未免打扰的占位会话，下次对账时补全。
+- 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。自己实现 `ImStore` 的，升到 0.5.0 要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并照接口注释更新合并、排序、总未读规则。

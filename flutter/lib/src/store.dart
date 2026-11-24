@@ -37,8 +37,9 @@ abstract class ImStore {
   // ---------------- 会话 ----------------
 
   /// 写入服务端会话列表的一页。已存在的会话按下面规则合并（[mergeConversation]）：
-  /// peer / type 取服务端；`maxSeq`、`readSeq` 取两边较大值（本地可能已被推送推进）；
-  /// 服务端 `maxSeq` 不小于本地时 `lastMessage` / `lastMsgAt` 取服务端。`syncedSeq` 不动，新会话为 0。
+  /// peer / type / 置顶 / 免打扰取服务端；`maxSeq`、`readSeq`、`clearSeq` 取两边较大值（本地可能已被推送推进）；
+  /// 服务端 `maxSeq` 不小于本地时 `lastMessage` / `lastMsgAt` 取服务端，清空范围内的预览置 null。
+  /// `syncedSeq` 不动，新会话为 0。`clearSeq` 变大时只改这一行，旧消息由调用方先调 [clearMessages] 清掉。
   Future<void> upsertConversations(List<ImConversation> list);
 
   Future<ImConversation?> getConversation(int conversationId);
@@ -46,7 +47,7 @@ abstract class ImStore {
   /// 按对方 user_id 查会话（单聊每对用户只有一条会话）。
   Future<ImConversation?> conversationByPeer(String peerId);
 
-  /// 全部会话，按 `lastMsgAt` 倒序（相同时按 id 倒序）。
+  /// 全部会话：置顶在前，按 `pinnedAt` 倒序；其余（及同时置顶的）按 `lastMsgAt` 倒序，再按 id 倒序。
   Future<List<ImConversation>> listConversations();
 
   /// 已读位置只进不退。返回更新后的会话；会话不存在返回 null。
@@ -55,8 +56,22 @@ abstract class ImStore {
   /// 所有会话 `readSeq = maxSeq`（`read_all` 推送 / 一键清未读）。
   Future<void> markAllRead();
 
-  /// 各会话 `maxSeq − readSeq`（不小于 0）之和。
+  /// 各**非免打扰**会话 `maxSeq − readSeq`（不小于 0）之和。
   Future<int> totalUnread();
+
+  /// 清空到 [clearSeq]：删掉该会话本地 `seq <= clearSeq` 的消息，`clearSeq` / `maxSeq` / `readSeq` / `syncedSeq`
+  /// 都不低于它，落在清空范围内的会话预览置 null（规则见 [clearedConversation]）。未确认消息不动。
+  /// 会话不存在、或 [clearSeq] 不比本地大时什么也不做。须是原子的：清到一半会留下再也没人清的旧消息。
+  Future<void> clearMessages(int conversationId, int clearSeq);
+
+  /// 删除会话行及其全部消息，含发给该会话对方的未确认消息。会话不存在时也删掉该会话的消息。
+  /// 消息必须一起删：否则会话因新消息重新出现后，旧消息会跟着显示出来。
+  Future<void> deleteConversation(int conversationId);
+
+  /// 会话设置增量补齐的游标（`GET /conversations/changes` 的 `next_cursor`），没存过为 null。
+  Future<String?> changesCursor();
+
+  Future<void> setChangesCursor(String cursor);
 
   /// 本地已连续持有到的 seq；0 表示从没拉过这个会话的消息（或会话不存在）。
   Future<int> syncedSeq(int conversationId);
@@ -75,6 +90,9 @@ abstract class ImStore {
   /// - 服务端版本（有 id）覆盖本地字段，`status` 变 sent、错误码清空，但保留本地 `localPath`；
   ///   `to` 为空串时保留本地的 `to`；`urlFetchedAt` 为空时保留本地的；
   /// - 已确认（sent）的消息不会被本地版本（无 id）降级——推送先到、HTTP 后超时也不会把它标成 failed。
+  ///
+  /// 会话存在且 `seq <= clearSeq` 的消息（清空前发出、清空后才到）不入库，已有的本地版本一并删掉，
+  /// 返回 `inserted: false`。
   ///
   /// 已确认消息入库后的副作用（[bumpConversation]）：
   /// - 会话存在：`seq > maxSeq` 时推进 `maxSeq` / `lastMessage` / `lastMsgAt`；本人发的消息把 `readSeq` 推到该条；
@@ -134,13 +152,28 @@ ImConversation mergeConversation(
 ) {
   if (local == null) return incoming;
   final newer = incoming.maxSeq >= local.maxSeq;
+  final clearSeq = math.max(local.clearSeq, incoming.clearSeq);
+  final last = newer
+      ? (incoming.lastMessage ?? local.lastMessage)
+      : local.lastMessage;
   return incoming.copyWith(
     maxSeq: math.max(local.maxSeq, incoming.maxSeq),
     readSeq: math.max(local.readSeq, incoming.readSeq),
-    lastMessage: newer
-        ? (incoming.lastMessage ?? local.lastMessage)
-        : local.lastMessage,
+    clearSeq: clearSeq,
+    // 清空后服务端返回 null，不能退回本地的旧预览。
+    lastMessage: last != null && last.seq > clearSeq ? last : null,
     lastMsgAt: newer ? incoming.lastMsgAt : local.lastMsgAt,
+  );
+}
+
+/// 清空到 [clearSeq] 对会话行的影响，见 [ImStore.clearMessages]。
+ImConversation clearedConversation(ImConversation c, int clearSeq) {
+  final last = c.lastMessage;
+  return c.copyWith(
+    clearSeq: clearSeq,
+    maxSeq: math.max(c.maxSeq, clearSeq),
+    readSeq: math.max(c.readSeq, clearSeq),
+    lastMessage: last != null && last.seq > clearSeq ? last : null,
   );
 }
 

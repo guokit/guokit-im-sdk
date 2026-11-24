@@ -6,6 +6,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -26,7 +27,10 @@ CREATE TABLE conversations (
   max_seq INTEGER NOT NULL DEFAULT 0,
   read_seq INTEGER NOT NULL DEFAULT 0,
   last_msg_at INTEGER NOT NULL,
-  synced_seq INTEGER NOT NULL DEFAULT 0
+  synced_seq INTEGER NOT NULL DEFAULT 0,
+  pinned_at INTEGER,
+  muted INTEGER NOT NULL DEFAULT 0,
+  clear_seq INTEGER NOT NULL DEFAULT 0
 )''',
   'CREATE INDEX idx_conversations_peer ON conversations (peer_id)',
   '''
@@ -49,6 +53,20 @@ CREATE TABLE messages (
   UNIQUE (from_id, client_msg_id)
 )''',
   'CREATE INDEX idx_messages_conv_seq ON messages (conversation_id, seq)',
+  _metaSchema,
+];
+
+/// 键值表，目前只存会话设置增量补齐的游标。
+const _metaSchema =
+    'CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)';
+const _changesCursorName = 'conversation_changes_cursor';
+
+/// v1 → v2（会话置顶、免打扰、清空）。
+const _upgradeV2 = [
+  'ALTER TABLE conversations ADD COLUMN pinned_at INTEGER',
+  'ALTER TABLE conversations ADD COLUMN muted INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE conversations ADD COLUMN clear_seq INTEGER NOT NULL DEFAULT 0',
+  _metaSchema,
 ];
 
 /// 库文件名：userId 里 `[A-Za-z0-9_-]` 以外的字符换成 `_`。
@@ -94,10 +112,17 @@ class SqliteImStore implements ImStore {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: (db, _) async {
           for (final sql in _schema) {
             await db.execute(sql);
+          }
+        },
+        onUpgrade: (db, from, _) async {
+          if (from < 2) {
+            for (final sql in _upgradeV2) {
+              await db.execute(sql);
+            }
           }
         },
       ),
@@ -133,10 +158,14 @@ class SqliteImStore implements ImStore {
     'max_seq': c.maxSeq,
     'read_seq': c.readSeq,
     'last_msg_at': c.lastMsgAt.millisecondsSinceEpoch,
+    'pinned_at': c.pinnedAt?.millisecondsSinceEpoch,
+    'muted': c.muted ? 1 : 0,
+    'clear_seq': c.clearSeq,
   };
 
   static ImConversation _conv(Map<String, Object?> r) {
     final last = r['last_message'] as String?;
+    final pinned = r['pinned_at'] as int?;
     return ImConversation(
       id: r['id'] as int,
       type: r['type'] as String,
@@ -154,6 +183,11 @@ class SqliteImStore implements ImStore {
         r['last_msg_at'] as int,
         isUtc: true,
       ),
+      pinnedAt: pinned == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(pinned, isUtc: true),
+      muted: r['muted'] == 1,
+      clearSeq: r['clear_seq'] as int,
     );
   }
 
@@ -252,7 +286,8 @@ class SqliteImStore implements ImStore {
   Future<List<ImConversation>> listConversations() async {
     final rows = await _conn.query(
       'conversations',
-      orderBy: 'last_msg_at DESC, id DESC',
+      // SQLite 里 NULL 小于任何值，DESC 时未置顶的自然排最后。
+      orderBy: 'pinned_at DESC, last_msg_at DESC, id DESC',
     );
     return rows.map(_conv).toList();
   }
@@ -277,14 +312,66 @@ class SqliteImStore implements ImStore {
   @override
   Future<int> totalUnread() async {
     final rows = await _conn.rawQuery(
-      'SELECT COALESCE(SUM(max_seq - read_seq), 0) AS n FROM conversations WHERE max_seq > read_seq',
+      'SELECT COALESCE(SUM(max_seq - read_seq), 0) AS n FROM conversations WHERE max_seq > read_seq AND muted = 0',
     );
     return rows.first['n'] as int;
   }
 
   @override
-  Future<int> syncedSeq(int conversationId) async {
+  Future<void> clearMessages(int conversationId, int clearSeq) =>
+      _conn.transaction((txn) async {
+        final c = await _getConv(txn, conversationId);
+        if (c == null || clearSeq <= c.clearSeq) return;
+        await _putConv(txn, clearedConversation(c, clearSeq));
+        await txn.delete(
+          'messages',
+          where: 'conversation_id = ? AND seq <= ?',
+          whereArgs: [conversationId, clearSeq],
+        );
+        final synced = await _getSynced(txn, conversationId);
+        await _setSynced(txn, conversationId, math.max(synced, clearSeq));
+      });
+
+  @override
+  Future<void> deleteConversation(int conversationId) => _conn.transaction((
+    txn,
+  ) async {
+    final c = await _getConv(txn, conversationId);
+    await txn.delete(
+      'messages',
+      where:
+          'conversation_id = ? OR (seq IS NULL AND from_id = ? AND to_id = ?)',
+      whereArgs: [conversationId, _userId, c?.peer.userId ?? ''],
+    );
+    await txn.delete(
+      'conversations',
+      where: 'id = ?',
+      whereArgs: [conversationId],
+    );
+  });
+
+  @override
+  Future<String?> changesCursor() async {
     final rows = await _conn.query(
+      'meta',
+      where: 'name = ?',
+      whereArgs: [_changesCursorName],
+    );
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  @override
+  Future<void> setChangesCursor(String cursor) => _conn.insert('meta', {
+    'name': _changesCursorName,
+    'value': cursor,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<int> syncedSeq(int conversationId) =>
+      _getSynced(_conn, conversationId);
+
+  static Future<int> _getSynced(DatabaseExecutor db, int conversationId) async {
+    final rows = await db.query(
       'conversations',
       columns: ['synced_seq'],
       where: 'id = ?',
@@ -330,12 +417,23 @@ class SqliteImStore implements ImStore {
       );
     }
     final inserted = rows.isEmpty;
-    final ImMessage merged;
+    final merged = inserted ? message : mergeMessage(_msg(rows.first), message);
+    final conv = isConfirmed(merged)
+        ? await _getConv(db, merged.conversationId!)
+        : null;
+    if (conv != null && merged.seq! <= conv.clearSeq) {
+      if (!inserted) {
+        await db.delete(
+          'messages',
+          where: 'local_id = ?',
+          whereArgs: [rows.first['local_id']],
+        );
+      }
+      return (message: merged, inserted: false);
+    }
     if (inserted) {
-      merged = message;
       await db.insert('messages', _msgRow(merged));
     } else {
-      merged = mergeMessage(_msg(rows.first), message);
       await db.update(
         'messages',
         _msgRow(merged),
@@ -346,18 +444,11 @@ class SqliteImStore implements ImStore {
 
     if (isConfirmed(merged)) {
       final convId = merged.conversationId!;
-      final conv = await _getConv(db, convId);
       final bumped = bumpConversation(conv, merged);
       if (bumped != null && !identical(bumped, conv)) {
         await _putConv(db, bumped);
       }
-      final synced = await db.query(
-        'conversations',
-        columns: ['synced_seq'],
-        where: 'id = ?',
-        whereArgs: [convId],
-      );
-      final s = synced.isEmpty ? 0 : synced.first['synced_seq'] as int;
+      final s = await _getSynced(db, convId);
       if (s > 0 && merged.seq == s + 1) await _setSynced(db, convId, s);
     }
     return (message: merged, inserted: inserted);

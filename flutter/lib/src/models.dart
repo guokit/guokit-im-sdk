@@ -422,9 +422,13 @@ class ImConversation {
     required this.maxSeq,
     required this.readSeq,
     required this.lastMsgAt,
+    this.pinnedAt,
+    this.muted = false,
+    this.clearSeq = 0,
   });
 
   /// 解析会话列表的一项（接入文档 §5.2 / §10.2）。服务端的 `unread` 字段不读，见 [unread]。
+  /// 旧版服务端没有 `pinned_at` / `muted` / `clear_seq`，按未置顶、未免打扰、没清空过处理。
   factory ImConversation.fromServer(Map json) {
     final last = json['last_message'];
     return ImConversation(
@@ -437,6 +441,11 @@ class ImConversation {
       maxSeq: _int(json['max_seq']),
       readSeq: _int(json['read_seq']),
       lastMsgAt: parseCst(json['last_msg_at'] as String),
+      pinnedAt: json['pinned_at'] == null
+          ? null
+          : parseCst(json['pinned_at'] as String),
+      muted: (json['muted'] as bool?) ?? false,
+      clearSeq: _intOrNull(json['clear_seq']) ?? 0,
     );
   }
 
@@ -450,6 +459,9 @@ class ImConversation {
       maxSeq: _int(json['max_seq']),
       readSeq: _int(json['read_seq']),
       lastMsgAt: _fromMs(json['last_msg_at']),
+      pinnedAt: json['pinned_at'] == null ? null : _fromMs(json['pinned_at']),
+      muted: (json['muted'] as bool?) ?? false,
+      clearSeq: _intOrNull(json['clear_seq']) ?? 0,
     );
   }
 
@@ -459,15 +471,26 @@ class ImConversation {
   final String type;
   final ImPeer peer;
 
-  /// 可能为 null（服务端极少数情况下不给）。
+  /// 本人清空过记录且之后没有新消息时为 null；极少数情况下服务端也会不给。
   final ImMessagePreview? lastMessage;
   final int maxSeq;
   final int readSeq;
 
-  /// 最后消息时间（UTC），会话列表按它倒序。
+  /// 最后消息时间（UTC），会话列表里非置顶会话按它倒序。
   final DateTime lastMsgAt;
 
+  /// 本人置顶该会话的时间（UTC），未置顶为 null。
+  final DateTime? pinnedAt;
+
+  /// 本人对该会话开了免打扰：[unread] 照常计数（可显示成小红点），但不计入总未读。
+  final bool muted;
+
+  /// 本人清空到的序号，`seq <= clearSeq` 的消息看不到；没清空过为 0。
+  final int clearSeq;
+
   bool get isService => type == 'service';
+
+  bool get pinned => pinnedAt != null;
 
   int get unread => maxSeq > readSeq ? maxSeq - readSeq : 0;
 
@@ -478,6 +501,9 @@ class ImConversation {
     int? maxSeq,
     int? readSeq,
     DateTime? lastMsgAt,
+    Object? pinnedAt = _unset,
+    bool? muted,
+    int? clearSeq,
   }) => ImConversation(
     id: id,
     type: type ?? this.type,
@@ -488,6 +514,11 @@ class ImConversation {
     maxSeq: maxSeq ?? this.maxSeq,
     readSeq: readSeq ?? this.readSeq,
     lastMsgAt: lastMsgAt ?? this.lastMsgAt,
+    pinnedAt: identical(pinnedAt, _unset)
+        ? this.pinnedAt
+        : pinnedAt as DateTime?,
+    muted: muted ?? this.muted,
+    clearSeq: clearSeq ?? this.clearSeq,
   );
 
   /// SDK 内部格式（存储层用），时间为 UTC 毫秒时间戳。
@@ -499,6 +530,9 @@ class ImConversation {
     'max_seq': maxSeq,
     'read_seq': readSeq,
     'last_msg_at': lastMsgAt.millisecondsSinceEpoch,
+    'pinned_at': pinnedAt?.millisecondsSinceEpoch,
+    'muted': muted,
+    'clear_seq': clearSeq,
   };
 }
 

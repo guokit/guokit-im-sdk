@@ -133,6 +133,104 @@ void main() {
         await s.upsertMessage(_msg(id: 6, seq: 6, cid: 'm6'));
         expect(await s.syncedSeq(1), 7);
       });
+
+      test('置顶在前；免打扰不计总未读；changes 游标持久化', () async {
+        ImConversation conv(int id, {int? pinned, bool muted = false}) =>
+            _conv(id, 'p$id', maxSeq: 1).copyWith(
+              pinnedAt: pinned == null
+                  ? null
+                  : _t0.add(Duration(hours: pinned)),
+              muted: muted,
+            );
+        await s.upsertConversations([
+          conv(2, pinned: 1),
+          conv(3, pinned: 2),
+          conv(4, muted: true),
+        ]);
+        expect((await s.listConversations()).map((c) => c.id), [3, 2, 4, 1]);
+        expect(await s.totalUnread(), 5); // 会话 1 的 3 条 + 2、3 各 1 条
+        expect(await s.changesCursor(), isNull);
+        await s.setChangesCursor('a');
+        await s.setChangesCursor('b');
+        expect(await s.changesCursor(), 'b');
+      });
+
+      test('clearMessages 清掉旧消息、推进 syncedSeq，之后不再收清空范围内的', () async {
+        await s.upsertMessages([
+          for (var i = 1; i <= 5; i++) _msg(id: i, seq: i, cid: 'm$i'),
+        ]);
+        await s.setSyncedSeq(1, 2);
+        await s.clearMessages(1, 4);
+        expect((await s.messages(1)).map((m) => m.seq), [5]);
+        final r = await s.upsertMessage(_msg(id: 3, seq: 3, cid: 'm3'));
+        expect((r.inserted, await s.getMessageById(3)), (false, null));
+        final c = (await s.getConversation(1))!;
+        expect((c.clearSeq, c.readSeq, await s.syncedSeq(1)), (4, 4, 5));
+        // 服务端 clear_seq 更大且最后消息为 null：不退回本地旧预览
+        await s.upsertMessage(_msg(id: 6, seq: 6, cid: 'm6'));
+        await s.upsertConversations([
+          _conv(1, 'u2', maxSeq: 6, readSeq: 6).copyWith(clearSeq: 6),
+        ]);
+        expect((await s.getConversation(1))!.lastMessage, isNull);
+      });
+
+      test('deleteConversation 连消息一起删（含未确认的），不碰别的会话', () async {
+        await s.upsertMessages([
+          _msg(id: 1, seq: 1, cid: 'a'),
+          _msg(from: 'u1', cid: 'b', conv: null),
+          _msg(id: 9, seq: 1, cid: 'c', from: 'u3', conv: 2),
+        ]);
+        await s.deleteConversation(1);
+        expect(await s.getConversation(1), isNull);
+        expect(await s.messages(1), isEmpty);
+        expect(await s.unconfirmedMessages('u2'), isEmpty);
+        expect((await s.messages(2)).single.id, 9);
+      });
     });
+  });
+
+  test('sqlite 从 v1 升到 v2：旧会话保留，新列取默认值', () async {
+    final dir = Directory.systemTemp.createTempSync('guokit_im_test');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final db = await databaseFactoryFfi.openDatabase(
+      '${dir.path}/${sqliteFileName('u1')}',
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: (db, _) async {
+          await db.execute(
+            'CREATE TABLE conversations (id INTEGER PRIMARY KEY, type TEXT NOT NULL, peer_id TEXT NOT NULL, '
+            "peer_nickname TEXT NOT NULL DEFAULT '', peer_avatar TEXT NOT NULL DEFAULT '', last_message TEXT, "
+            'max_seq INTEGER NOT NULL DEFAULT 0, read_seq INTEGER NOT NULL DEFAULT 0, '
+            'last_msg_at INTEGER NOT NULL, synced_seq INTEGER NOT NULL DEFAULT 0)',
+          );
+          await db.execute(
+            'CREATE TABLE messages (local_id INTEGER PRIMARY KEY, conversation_id INTEGER, seq INTEGER)',
+          );
+        },
+      ),
+    );
+    await db.insert('conversations', {
+      'id': 1,
+      'type': 'c2c',
+      'peer_id': 'u2',
+      'max_seq': 5,
+      'last_msg_at': 0,
+      'synced_seq': 3,
+    });
+    await db.close();
+
+    final s = SqliteImStore(
+      factory: databaseFactoryFfi,
+      directory: () async => dir.path,
+    );
+    await s.open('u1');
+    addTearDown(s.close);
+    final c = (await s.listConversations()).single;
+    expect((c.maxSeq, c.pinnedAt, c.muted, c.clearSeq), (5, null, false, 0));
+    expect(await s.syncedSeq(1), 3);
+    await s.setChangesCursor('a');
+    expect(await s.changesCursor(), 'a');
+    await s.clearMessages(1, 5);
+    expect((await s.getConversation(1))!.clearSeq, 5);
   });
 }

@@ -176,6 +176,49 @@ class ImApi {
       (_asMap(await _json('POST', '/conversations/read-all'))['updated'] as num)
           .toInt();
 
+  /// `PUT /conversations/{id}/settings`：改置顶 / 免打扰，至少给一个。
+  /// 这里与 [clearConversation]、[deleteConversation] 都返回会话设置的原始 Map（接入文档 §5.10），由同步层应用。
+  Future<Map<String, dynamic>> setConversationSettings(
+    int conversationId, {
+    bool? pinned,
+    bool? muted,
+  }) async => _asMap(
+    await _json(
+      'PUT',
+      '/conversations/$conversationId/settings',
+      body: {'pinned': ?pinned, 'muted': ?muted},
+    ),
+  );
+
+  /// `POST /conversations/{id}/clear`：清空本人这一侧的记录。
+  Future<Map<String, dynamic>> clearConversation(int conversationId) async =>
+      _asMap(await _json('POST', '/conversations/$conversationId/clear'));
+
+  /// `DELETE /conversations/{id}`：删除会话（清空 + 从本人列表隐藏）。
+  Future<Map<String, dynamic>> deleteConversation(int conversationId) async =>
+      _asMap(await _json('DELETE', '/conversations/$conversationId'));
+
+  /// `GET /conversations/changes`：会话设置增量补齐一页，含已删除（`visible: false`）的会话。
+  /// 没有新修改时 `nextCursor` 就是传入值；从没改过设置时为空串。
+  Future<({List<Map<String, dynamic>> items, String nextCursor, bool hasMore})>
+  conversationChanges({String? cursor, int? limit}) async {
+    final d = _asMap(
+      await _json(
+        'GET',
+        '/conversations/changes',
+        query: {
+          if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+          if (limit != null) 'limit': '$limit',
+        },
+      ),
+    );
+    return (
+      items: [for (final e in d['items'] as List) _asMap(e)],
+      nextCursor: d['next_cursor'] as String,
+      hasMore: d['has_more'] as bool,
+    );
+  }
+
   /// `PUT /blocks/{target}`：拉黑（幂等）。
   Future<void> block(String target) =>
       _json('PUT', '/blocks/${Uri.encodeComponent(target)}');
