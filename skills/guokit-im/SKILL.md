@@ -26,7 +26,7 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 2. 存量用户 `POST /server/users/batch` 批量导入（每批 ≤100）；注册、改昵称头像时 `PUT /server/users/{user_id}`。user_id 用自家用户主键字符串，满足 `[A-Za-z0-9_-]{1,64}`。
 3. 用户登录时 `POST /server/users/{user_id}/token`，把 `token` 与 `expires_at` 交给客户端；客户端令牌失效时找后端换。
 4. 自家封号 → `PATCH /server/users/{user_id}` `{"status":0}`；退出全部设备 → `POST .../kick`；自家拉黑 → `PUT /server/users/{user_id}/blocks/{target}`。
-5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送。
+5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送。站点接了微信渠道、要让坐席认出微信用户是哪个会员的，再实现 `resolve_user`（同步，3 秒内回）。
 
 客户端：
 1. 拿到令牌后连 `wss://<IM 域名>/api/im/v1/connect/websocket`（Centrifuge 协议，用官方 SDK：Flutter `centrifuge`、Web `centrifuge`）。

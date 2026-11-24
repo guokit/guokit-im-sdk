@@ -63,7 +63,7 @@ try {
 
 必须用**原始请求体**验签，不要先 `json_decode` 再编码。时间戳须为数字且与当前相差不超过 300 秒（第 5 个参数可改）。
 
-`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `user_state`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
+`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `user_state` / `resolve_user`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
 
 响应体用 `Callback::allow()`、`Callback::reject('原因')`、`Callback::ack()` 生成（均返回 JSON 字符串）。
 
@@ -87,6 +87,11 @@ try {
 header('Content-Type: application/json');
 if ($event->name === 'before_send') {
     echo containsBannedWords($event->data) ? Callback::reject('含违规内容') : Callback::allow();
+} elseif ($event->name === 'resolve_user') {
+    // 微信用户是哪个会员：按 openid / unionid 查自己的绑定表，3 秒内回。只返回已确认绑定、且已导入 IM 的会员；
+    // 不认识回空串（站点会清掉已有关联），查询出错请回 code 非 0（站点保留原结果稍后再问）
+    $d = $event->data;   // channel、account_type（oa / mp）、appid、openid、unionid（可能为空串）
+    echo json_encode(['code' => 0, 'data' => ['user_id' => findMemberByWechat($d['appid'], $d['openid'], $d['unionid']) ?? '']]);
 } else {
     // after_send：先按 X-Im-Delivery-Id 落库去重，再处理
     // 只给自己的用户推离线：to_source 为 visitor 的是网页访客、wechat 是微信用户（都没有设备）、service 是平台客服；
