@@ -49,6 +49,10 @@ try {
 | `kick($userId)` | 踢下线，旧令牌全部作废 |
 | `block($userId, $target)` / `unblock($userId, $target)` | 拉黑 / 解除（`$userId` 拒收 `$target` 的消息） |
 | `blocks($userId, $offset = 0, $limit = 50)` | 黑名单列表，返回 `items` 与 `has_more` |
+| `conversationSettings($userId, $peerId)` | 按「用户 + 对方」查会话设置（对方 `@cs` 即客服会话）；查不到抛 `VALIDATION`（HTTP 404） |
+| `setConversationSettings($userId, $peerId, array $settings)` | 置顶 / 免打扰：`['pinned'=>bool, 'muted'=>bool]`，至少一个 |
+| `clearConversation($userId, $peerId)` | 清空该用户这一侧的聊天记录 |
+| `deleteConversation($userId, $peerId)` | 删除会话（清空 + 移出列表 + 取消置顶，免打扰保留） |
 | `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式 |
 | `history($conversationId, $afterSeq = null, $beforeSeq = null, $limit = 30)` | 查会话历史（审计） |
 | `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |
@@ -85,6 +89,10 @@ if ($event->name === 'before_send') {
     echo containsBannedWords($event->data) ? Callback::reject('含违规内容') : Callback::allow();
 } else {
     // after_send：先按 X-Im-Delivery-Id 落库去重，再处理
+    // $event->data['to_muted'] 为 true 表示接收方对该会话开了免打扰，不要推离线
+    if (!($event->data['to_muted'] ?? false)) {
+        // pushOffline(...)
+    }
     echo Callback::ack();
 }
 ```

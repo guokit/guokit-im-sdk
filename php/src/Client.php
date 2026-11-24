@@ -103,6 +103,30 @@ class Client
         ]);
     }
 
+    /** 按「用户 + 对方」查会话设置；对方为 `@cs` 即客服会话。查不到抛 VALIDATION（HTTP 404）。 */
+    public function conversationSettings(string $userId, string $peerId): array
+    {
+        return $this->call('GET', $this->convPath($userId, $peerId));
+    }
+
+    /** @param array $settings ['pinned'=>bool, 'muted'=>bool]，至少一个 */
+    public function setConversationSettings(string $userId, string $peerId, array $settings): array
+    {
+        return $this->call('PUT', $this->convPath($userId, $peerId) . '/settings', ['json' => (object) $settings]);
+    }
+
+    /** 清空该用户这一侧的聊天记录 */
+    public function clearConversation(string $userId, string $peerId): array
+    {
+        return $this->call('POST', $this->convPath($userId, $peerId) . '/clear');
+    }
+
+    /** 删除会话：清空 + 从列表移除 + 取消置顶，免打扰保留 */
+    public function deleteConversation(string $userId, string $peerId): array
+    {
+        return $this->call('DELETE', $this->convPath($userId, $peerId));
+    }
+
     public function sendMessage(string $from, string $to, string $type, array $content, string $clientMsgId): array
     {
         return $this->call('POST', '/messages', ['json' => [
@@ -124,6 +148,11 @@ class Client
             $query['before_seq'] = $beforeSeq;
         }
         return $this->call('GET', '/conversations/' . $conversationId . '/messages', ['query' => $query]);
+    }
+
+    private function convPath(string $userId, string $peerId): string
+    {
+        return '/users/' . rawurlencode($userId) . '/conversations/' . rawurlencode($peerId);
     }
 
     private function blockPath(string $userId, string $target): string

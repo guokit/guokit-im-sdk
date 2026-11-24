@@ -125,6 +125,10 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 | 封号 / 解封 | `PATCH /users/{user_id}` `{"status":0}` / `{"status":1}`；封号让全部令牌立即失效并断开连接，解封后要重新签令牌 |
 | 退出全部设备 | `POST /users/{user_id}/kick` |
 | 自家拉黑后同步 | `PUT /users/{user_id}/blocks/{target}`；解除 `DELETE` 同路径；幂等，失败可直接重试 |
+| 查会话设置 | `GET /users/{user_id}/conversations/{peer_id}`，对方为 `@cs` 即客服会话；查不到 404 + `VALIDATION`；返回 `{conversation_id, peer_user_id, pinned, pinned_at, muted, clear_seq, unread, visible}` |
+| 置顶 / 免打扰 | `PUT /users/{user_id}/conversations/{peer_id}/settings` `{"pinned"?:bool,"muted"?:bool}`，至少一个 |
+| 清空聊天记录 | `POST /users/{user_id}/conversations/{peer_id}/clear`，只清该用户这一侧 |
+| 删除会话 | `DELETE /users/{user_id}/conversations/{peer_id}`：清空 + 移出列表 + 取消置顶，免打扰保留 |
 | 以某用户身份发消息 | `POST /messages`，请求体同客户端发消息再加 `from`；from / to 不能是 `@cs` |
 | 审计查历史 | `GET /conversations/{id}/messages` |
 | 查用户是否在线 | `POST /users/online` `{"user_ids":[…]}`，每次 1–100 个，返回 `items[{user_id, online}]`；在线 = 此刻至少一条长连接，这是权威来源 |
@@ -136,7 +140,7 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 ## 3. 回调验签
 
 签名 `hex(HMAC-SHA256(回调密钥, X-Im-Timestamp + "\n" + 原始请求体))`。三件事缺一不可：**原始请求体**、**常量时间比较**、**时间戳 5 分钟窗口**。
-after_send 按 `X-Im-Delivery-Id` 去重；before_send 显式回 `allow: true`。
+after_send 按 `X-Im-Delivery-Id` 去重；data 带 `to_muted`（接收方对该会话开了免打扰，为 true 时建议不推离线），`to_unread_total` 不计入免打扰会话；before_send 显式回 `allow: true`。
 
 ### PHP
 
