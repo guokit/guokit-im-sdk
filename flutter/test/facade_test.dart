@@ -364,6 +364,20 @@ void main() {
     expect(requests.length, before);
   });
 
+  test('leaveCs 联系方式不合要求直接抛 ArgumentError，不发请求', () async {
+    await im.login('u1');
+    final before = requests.length;
+    expect(() => im.leaveCs(name: '张三', phone: ' '), throwsArgumentError);
+    expect(() => im.leaveCs(phone: '12a45'), throwsArgumentError);
+    expect(() => im.leaveCs(phone: '1234'), throwsArgumentError);
+    expect(
+      () => im.leaveCs(name: '字' * 51, phone: '13800000000'),
+      throwsArgumentError,
+    );
+    expect(() => im.leaveCs(email: '${'a' * 120}@b.cn'), throwsArgumentError);
+    expect(requests.length, before);
+  });
+
   test('pendingTo：还没有会话时也能取到发给对方的失败消息，按时间升序', () async {
     await im.login('u1');
     ImMessage local(String c, int sec) => ImMessage(

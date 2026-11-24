@@ -1,6 +1,6 @@
 name: guokit_im
 description: guokit IM（果壳软件即时通讯）Flutter 客户端 SDK：令牌续期、断线对账、本地消息缓存、发送重试与去重、图片收发。
-version: 0.6.0
+version: 0.7.0
 homepage: https://github.com/guokit/guokit-im-sdk
 repository: https://github.com/guokit/guokit-im-sdk
 publish_to: none

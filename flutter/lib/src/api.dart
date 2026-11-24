@@ -272,6 +272,23 @@ class ImApi {
     },
   );
 
+  /// `POST /api/imcs/v1/leave`：留联系方式，把这次排队转成留言，返回单号。空的项不带。
+  Future<String> csLeave({String? name, String? phone, String? email}) async {
+    final d = _asMap(
+      await _json(
+        'POST',
+        '/leave',
+        prefix: _csPrefix,
+        body: {
+          if (name != null && name.isNotEmpty) 'contact_name': name,
+          if (phone != null && phone.isNotEmpty) 'contact_phone': phone,
+          if (email != null && email.isNotEmpty) 'contact_email': email,
+        },
+      ),
+    );
+    return d['ticket_no'] as String;
+  }
+
   /// 关闭底层 HTTP 客户端（只关自己创建的，外部传入的由调用方管理）。
   void close() {
     if (_ownsClient) _client.close();

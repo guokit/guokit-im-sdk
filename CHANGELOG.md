@@ -2,6 +2,14 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.7.0 — 2026-11-24
+
+没有客服在线时留联系方式。需要 IM 服务端 v1.13.0；旧服务端上除 `leaveCs` 抛 `ImApiException` 外，其余功能不受影响。
+
+- **Flutter**：`ImCsState` 加 `agentsOnline`（旧服务端不给，按 true）、`leaveEnabled`（按 false）与 `canLeave`；新增 `leaveCs({name, phone, email})`，返回留言单号。只加不改
+- **PHP**：代码不变；README 的回调示例加 `resolve_user`，after_send 的来源说明加 `wechat`
+- 接入文档新增 §8.6 `resolve_user`（微信用户是哪个会员，服务端 v1.16.0）、§10.8 工单进展、§10.9 留言、§10.10 微信渠道，§8.5 用户来源加 `wechat`；OpenAPI 加 `POST /api/imcs/v1/leave`，客服状态加 `agents_online`、`leave_enabled`；README 注明各能力需要的服务端版本；Skill、`llms-full.txt` 同步
+
 ## v0.6.0 — 2026-11-24
 
 智能客服：机器人接待状态、转人工、客服消息的发送者角色、回调里的用户来源。需要 IM 服务端 v1.12.0；旧服务端上除 `handoffCs` 抛 `ImApiException` 外，其余功能不受影响。

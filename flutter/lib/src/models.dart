@@ -588,6 +588,8 @@ class ImCsState {
     required this.status,
     required this.sessionId,
     required this.queuePosition,
+    this.agentsOnline = true,
+    this.leaveEnabled = false,
   });
 
   /// 不认识的 status 按 [ImCsStatus.none] 处理，服务端将来加状态时不至于解析失败。
@@ -598,6 +600,8 @@ class ImCsState {
     ),
     sessionId: (json['session_id'] as num).toInt(),
     queuePosition: (json['queue_position'] as num).toInt(),
+    agentsOnline: json['agents_online'] as bool? ?? true,
+    leaveEnabled: json['leave_enabled'] as bool? ?? false,
   );
 
   final ImCsStatus status;
@@ -607,4 +611,14 @@ class ImCsState {
 
   /// 排队名次（含自己，排第一为 1）；非 [ImCsStatus.queued] 时为 0。
   final int queuePosition;
+
+  /// 是否有坐席在（在线或忙碌）；坐席都满额时仍为 true。v1.13.0 之前的服务端不给，按 true。
+  final bool agentsOnline;
+
+  /// 站点是否开启了留言。v1.13.0 之前的服务端不给，按 false。
+  final bool leaveEnabled;
+
+  /// 现在可以给用户「留联系方式」的表单（见 `GuokitIm.leaveCs`）：排队中、没有坐席在、站点开了留言。
+  bool get canLeave =>
+      status == ImCsStatus.queued && !agentsOnline && leaveEnabled;
 }

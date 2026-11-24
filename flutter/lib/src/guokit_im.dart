@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -405,6 +406,42 @@ class GuokitIm {
     return _call(() {
       _requireLogin();
       return _api.csRate(sessionId, rating, comment: comment);
+    });
+  }
+
+  static final _leavePhone = RegExp(r'^[0-9+\- ]{5,30}$');
+
+  /// 没有坐席在时留联系方式，把这次排队立刻转成留言，返回单号。[ImCsState.canLeave] 为 true 时再给用户表单；
+  /// 留言内容不用另填，就是用户这次在会话里说的话。
+  ///
+  /// [phone] 与 [email] 至少填一项，都去首尾空白：称呼 ≤50 字，电话为 5–30 位数字、`+`、`-`、空格，
+  /// 邮箱 ≤120 字节；不满足抛 [ArgumentError]，邮箱格式由服务端校验。
+  ///
+  /// 成功后这次排队结束（状态变 [ImCsStatus.none]），会收到一条带单号的系统消息，请再取一次 [csState]。
+  /// 已经转成留言的再调，只更新那张单的联系方式。
+  ///
+  /// 抛 [ImApiException]：`VALIDATION`（有坐席在、还没说过话、留言已处理完、格式不对；没装工单或没开留言时
+  /// `httpStatus` 为 404），直接显示 `message`；`IM_RATE_LIMITED` 是每小时 5 次，**不要按
+  /// [ImApiException.isTemporary] 自动重试**。需要 IM 服务端 v1.13.0 及以上。
+  Future<String> leaveCs({String? name, String? phone, String? email}) {
+    final n = name?.trim() ?? '';
+    final p = phone?.trim() ?? '';
+    final e = email?.trim() ?? '';
+    if (p.isEmpty && e.isEmpty) {
+      throw ArgumentError('电话与邮箱至少填一项');
+    }
+    if (n.runes.length > 50) {
+      throw ArgumentError.value(name, 'name', '称呼不能超过 50 字');
+    }
+    if (p.isNotEmpty && !_leavePhone.hasMatch(p)) {
+      throw ArgumentError.value(phone, 'phone', '电话须为 5–30 位数字、+、-、空格');
+    }
+    if (utf8.encode(e).length > 120) {
+      throw ArgumentError.value(email, 'email', '邮箱不能超过 120 字节');
+    }
+    return _call(() {
+      _requireLogin();
+      return _api.csLeave(name: n, phone: p, email: e);
     });
   }
 
