@@ -13,7 +13,7 @@ info:
     - 全部接口还受站点授权校验：授权异常时回 HTTP 403 + `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN`。
 
     长连接（WebSocket，Centrifuge 协议）不在本规范内，地址、鉴权、断开码见接入文档 §6；
-    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`。
+    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`、`PushConversationChanged`。
 servers:
   - url: https://im.example.com
     description: 示例地址，换成你的 IM 服务域名
@@ -344,6 +344,84 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/im/v1/server/users/{user_id}/conversations/{peer_id}:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      - $ref: '#/components/parameters/PeerIdPath'
+    get:
+      tags: [服务端]
+      operationId: serverGetConversationSettings
+      summary: 查询用户对某会话的设置
+      description: |
+        按「用户 + 对方」定位会话（`{peer_id}` 为对方 user_id，客服会话写 `@cs`）。
+        会话要双方有过消息才存在；查不到会话回 404 `VALIDATION`（所以不能提前给没聊过的人设免打扰）。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettingsOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [服务端]
+      operationId: serverDeleteConversation
+      summary: 替用户删除会话
+      description: 同客户端 `DELETE /conversations/{id}`：清空该用户这一侧的记录并从其列表移除、取消置顶，免打扰保留。向该用户频道推 `conversation_changed`。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettingsOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/conversations/{peer_id}/settings:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      - $ref: '#/components/parameters/PeerIdPath'
+    put:
+      tags: [服务端]
+      operationId: serverSetConversationSettings
+      summary: 替用户置顶 / 免打扰
+      description: 同客户端 `PUT /conversations/{id}/settings`，`pinned`、`muted` 至少给一个。向该用户频道推 `conversation_changed`。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pinned: { type: boolean }
+                muted: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettingsOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/conversations/{peer_id}/clear:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      - $ref: '#/components/parameters/PeerIdPath'
+    post:
+      tags: [服务端]
+      operationId: serverClearConversation
+      summary: 替用户清空聊天记录
+      description: 同客户端 `POST /conversations/{id}/clear`。向该用户频道推 `conversation_changed`。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettingsOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/im/v1/server/messages:
     post:
       tags: [服务端]
@@ -509,7 +587,10 @@ paths:
       tags: [客户端]
       operationId: listConversations
       summary: 会话列表（游标分页）
-      description: 只列出有过消息的会话，按最后一条消息时间倒序，单聊与客服会话混排。
+      description: |
+        只列出本人列表里的会话（有过消息、且没被本人删除），单聊与客服会话混排。
+        **不带 cursor 的首页**先放全部置顶会话（按置顶时间倒序，最多 50 个），再接 `limit` 条非置顶会话；
+        之后的页只翻非置顶会话，按最后一条消息时间倒序。
       security: [{ UserToken: [] }]
       parameters:
         - name: cursor
@@ -552,10 +633,11 @@ paths:
       tags: [客户端]
       operationId: getUnread
       summary: 总未读
+      description: 本人所有**非免打扰**会话的未读之和，可直接用作 App 角标。免打扰会话自己的 `unread` 照常计数，只是不计入这里；与 after_send 的 `to_unread_total` 同一口径。
       security: [{ UserToken: [] }]
       responses:
         '200':
-          description: 成功返回所有会话未读之和。
+          description: 成功返回所有非免打扰会话的未读之和。
           content:
             application/json:
               schema:
@@ -567,7 +649,7 @@ paths:
                         type: object
                         required: [total]
                         properties:
-                          total: { type: integer, format: int64, description: 总未读数 }
+                          total: { type: integer, format: int64, description: 总未读数，不计免打扰会话 }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
@@ -582,6 +664,8 @@ paths:
       description: |
         `after_seq` 补拉（返回 seq > after_seq）、`before_seq` 翻历史（返回 seq < before_seq），都不传为最新一页，两者只能传一个。
         items 一律按 seq 升序。不是会话成员（或会话不存在）回 403 `FORBIDDEN`。
+        本人清空过记录（或删除过会话）时只返回 `seq > clear_seq` 的消息：`after_seq` 小于 `clear_seq` 按 `clear_seq` 处理，
+        翻历史翻到 `clear_seq + 1` 为止（此时 `has_more` 为 false）。对方与服务端审计查询不受影响。
       security: [{ UserToken: [] }]
       parameters:
         - $ref: '#/components/parameters/AfterSeq'
@@ -609,7 +693,7 @@ paths:
       operationId: markAllRead
       summary: 一键清全部未读
       description: |
-        无请求体。把该用户所有会话（含客服会话）的已读位置推到各自最新一条。
+        无请求体。把该用户所有会话（含客服会话、免打扰会话，以及已删除不在列表里的会话）的已读位置推到各自最新一条。
         `updated > 0` 时向本人频道推一条 `read_all` 事件（见 `PushReadAll`），不逐会话推 `read`。
       security: [{ UserToken: [] }]
       responses:
@@ -665,6 +749,120 @@ paths:
                         properties:
                           read_seq: { type: integer, format: int64 }
                           unread: { type: integer, format: int64 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/changes:
+    get:
+      tags: [客户端]
+      operationId: conversationChanges
+      summary: 会话设置增量补齐
+      description: |
+        返回本人置顶 / 免打扰 / 清空 / 删除过的会话的**当前**设置（含已删除、`visible: false` 的会话），按修改时间升序。
+        给离线期间错过 `conversation_changed` 推送的设备用：每次重连对账时带上次的 `next_cursor` 调一次，
+        `has_more` 为 true 时接着翻。同一秒内的修改可能重复返回，按 `conversation_id` 整行覆盖即可；
+        没有新修改时 `next_cursor` 原样返回传入值。首次不传 cursor 返回全部改过设置的会话。
+      security: [{ UserToken: [] }]
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: 上次返回的 `next_cursor`，持久化保存
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: 默认 100，最大 200（超出按 200）
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200':
+          description: 成功返回本页变更。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor, has_more]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/ConversationSettings' }
+                          next_cursor: { type: string, description: 下次调用带上；本页为空时等于传入值 }
+                          has_more: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/{id}/settings:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    put:
+      tags: [客户端]
+      operationId: setConversationSettings
+      summary: 置顶 / 免打扰
+      description: |
+        只改本人这一侧，对方看不到。`pinned`、`muted` 至少给一个，没给的不变。
+        免打扰会话自己的 `unread` 照常计数，但不计入总未读（`GET /unread`）与 after_send 的 `to_unread_total`。
+        置顶最多 50 个；只有出现在会话列表里的会话能置顶。
+        成功后向本人频道推 `conversation_changed`（见 `PushConversationChanged`）。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pinned: { type: boolean }
+                muted: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/{id}/clear:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    post:
+      tags: [客户端]
+      operationId: clearConversation
+      summary: 清空聊天记录
+      description: |
+        无请求体。只清本人这一侧：`clear_seq` 与 `read_seq` 推到会话最新，之后拉消息只返回 `seq > clear_seq` 的消息；
+        会话留在列表原位，`last_message` 为 null。对方不受影响，消息本身不删除。
+        成功后向本人频道推 `conversation_changed`（见 `PushConversationChanged`）。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    delete:
+      tags: [客户端]
+      operationId: deleteConversation
+      summary: 删除会话
+      description: |
+        无请求体。= 清空聊天记录 + 从本人会话列表移除 + 取消置顶（免打扰保留）。对方不受影响。
+        之后该会话有新消息时会重新出现在列表里，只能看到新消息。
+        成功后向本人频道推 `conversation_changed`（见 `PushConversationChanged`）。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkConversationSettings' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
@@ -833,6 +1031,12 @@ components:
       required: true
       description: 被拉黑方 user_id，限 `[A-Za-z0-9_-]{1,64}`（所以 `@cs` 不合法）
       schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+    PeerIdPath:
+      name: peer_id
+      in: path
+      required: true
+      description: 会话对方的 user_id；该用户的客服会话写 `@cs`
+      schema: { type: string, pattern: '^(@cs|[A-Za-z0-9_-]{1,64})$' }
     ConversationIdPath:
       name: id
       in: path
@@ -871,6 +1075,28 @@ components:
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
 
   responses:
+    OkConversationSettings:
+      description: 成功返回该会话在本人这一侧的设置。
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/OkEnvelope'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ConversationSettings' }
+    OkConversationSettingsOrRateLimited:
+      description: 成功返回会话设置；或 `IM_RATE_LIMITED`（HTTP 200，code 非 0）。
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConversationSettings' }
+              - $ref: '#/components/schemas/ErrorEnvelope'
     OkEmpty:
       description: 成功，`data` 为 `{}`。
       content:
@@ -1214,7 +1440,7 @@ components:
     Conversation:
       type: object
       description: 会话列表的一项。客服会话 `type` 为 `service`、`peer.user_id` 固定为 `@cs`。
-      required: [conversation_id, type, peer, last_message, unread, max_seq, read_seq, last_msg_at]
+      required: [conversation_id, type, peer, last_message, unread, max_seq, read_seq, last_msg_at, clear_seq, pinned, pinned_at, muted]
       properties:
         conversation_id: { type: integer, format: int64 }
         type:
@@ -1223,7 +1449,7 @@ components:
           description: c2c 普通单聊；service 平台客服会话
         peer: { $ref: '#/components/schemas/User' }
         last_message:
-          description: 最后一条消息摘要，极少数情况下为 null，请判空
+          description: 最后一条消息摘要，请判空：本人清空过记录（最后一条 seq 不超过 clear_seq）时为 null，极少数情况下也可能为 null
           oneOf:
             - $ref: '#/components/schemas/LastMessage'
             - type: 'null'
@@ -1231,6 +1457,45 @@ components:
         max_seq: { type: integer, format: int64 }
         read_seq: { type: integer, format: int64 }
         last_msg_at: { $ref: '#/components/schemas/DateTime' }
+        clear_seq: { type: integer, format: int64, description: 本人清空到的序号，拉消息只会返回比它大的 seq；没清空过为 0 }
+        pinned: { type: boolean, description: 本人是否置顶 }
+        pinned_at:
+          description: 置顶时间，未置顶为 null
+          oneOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        muted: { type: boolean, description: 本人是否免打扰；免打扰会话的 unread 照常计数，但不计入总未读 }
+
+    ConversationSettings:
+      type: object
+      description: 某用户在某会话里的设置（只属于本人，对方看不到）。
+      required: [conversation_id, peer_user_id, pinned, pinned_at, muted, clear_seq, unread, visible]
+      properties:
+        conversation_id: { type: integer, format: int64 }
+        peer_user_id: { type: string, description: 对方 user_id，客服会话为 `@cs` }
+        pinned: { type: boolean }
+        pinned_at:
+          description: 置顶时间，未置顶为 null
+          oneOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        muted: { type: boolean, description: 免打扰 }
+        clear_seq: { type: integer, format: int64, description: 清空到的序号，seq 不超过它的消息本人看不到 }
+        unread: { type: integer, format: int64 }
+        visible: { type: boolean, description: 是否出现在本人会话列表里（删除后为 false，有新消息时恢复） }
+
+    PushConversationChanged:
+      type: object
+      description: |
+        **经长连接下发**，见接入文档 §6。本人置顶 / 免打扰 / 清空 / 删除会话成功后推给本人所有在线设备（不推给对方），
+        `conversation` 带完整设置，客户端直接覆盖本地。`clear` / `delete` 时删除本地 `seq <= clear_seq` 的消息，`delete` 时把会话移出列表。
+      required: [event, action, conversation]
+      properties:
+        event: { type: string, const: conversation_changed }
+        action:
+          type: string
+          enum: [settings, clear, delete]
+        conversation: { $ref: '#/components/schemas/ConversationSettings' }
 
     # ---- 长连接推送事件 ----
     PushMessage:

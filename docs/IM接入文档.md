@@ -1,6 +1,6 @@
 # IM 接入文档
 
-本文面向接入方的**后端**与**客户端（App / Web）**开发。一期能力：单聊；文本 / 图片 / 位置 / 自定义四种消息；会话列表；未读与标已读；多端同步；发送前 / 发送后回调。
+本文面向接入方的**后端**与**客户端（App / Web）**开发。一期能力：单聊；文本 / 图片 / 位置 / 自定义四种消息；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后回调。
 群聊、撤回、语音、对方已读回执暂不提供。
 
 下文 `https://im.example.com` 代表你的 IM 服务域名，换成实际地址。
@@ -13,10 +13,11 @@
  │              │ ◀─────────────────────────────────────────────────────────── │   IM 服务端   │
  └──────┬───────┘   回调（签名）：before_send（同步） / after_send、user_state（异步）│  （MySQL 为准）│
         │ 登录时把用户令牌下发给 App                                            │              │
- ┌──────▼───────┐   HTTP 上行（Bearer 令牌）：发消息 / 会话 / 已读 / 上传        │              │
+ ┌──────▼───────┐   HTTP 上行（Bearer 令牌）：发消息 / 会话与设置 / 已读 / 上传  │              │
  │ 客户端 App/Web│ ───────────────────────────────────────────────────────────▶ │              │
  │              │ ◀─────────────────────────────────────────────────────────── │              │
- └──────────────┘   WebSocket 下行（Centrifuge 协议）：message / read / read_all 事件 └──────────────┘
+ │              │   WebSocket 下行（Centrifuge 协议）：message / read /          │              │
+ └──────────────┘   read_all / conversation_changed 事件                         └──────────────┘
 ```
 
 客户端**上行全走 HTTP**，WebSocket 只用来**收**推送。
@@ -60,7 +61,7 @@
 | 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），`message` 为「对方已将你拉黑」 |
 | 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息超限（§9） |
 | 403 | `FORBIDDEN` | 客户端访问了自己不在其中（或不存在）的会话 |
-| 404 | `VALIDATION` | 服务端审计查询的会话不存在 |
+| 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10） |
 | 403 | `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN` | IM 站点授权异常，联系 IM 服务提供方 |
 | 500 | `INTERNAL` | 服务端错误，可稍后重试 |
 
@@ -93,6 +94,10 @@
 | DELETE | `/users/{user_id}/blocks/{target}` | 解除拉黑 |
 | GET | `/users/{user_id}/blocks` | 黑名单列表 |
 | POST | `/users/online` | 批量查询在线状态 |
+| GET | `/users/{user_id}/conversations/{peer_id}` | 查询某用户对某会话的设置 |
+| PUT | `/users/{user_id}/conversations/{peer_id}/settings` | 替用户置顶 / 免打扰 |
+| POST | `/users/{user_id}/conversations/{peer_id}/clear` | 替用户清空聊天记录 |
+| DELETE | `/users/{user_id}/conversations/{peer_id}` | 替用户删除会话 |
 
 ### 4.1 导入或更新用户 `PUT /users/{user_id}`
 
@@ -164,7 +169,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 ### 4.6 查会话历史 `GET /conversations/{id}/messages`
 
-参数与客户端拉消息相同（§5.3），不校验成员身份。会话不存在 → 404 `VALIDATION`。
+参数与客户端拉消息相同（§5.3），不校验成员身份，也不受用户清空记录或删除会话（§5.10）影响，始终返回全量。会话不存在 → 404 `VALIDATION`。
 
 ### 4.7 黑名单
 
@@ -211,6 +216,37 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 - **在线 = 该用户此刻至少有一条长连接**，与 after_send 的 `to_online` 同一口径。不存在、被封禁的用户都返回 `false`，不报错。
 - 这是在线状态的**权威来源**；上下线回调（§8.4）只是提醒。查到之后怎么展示（App 里的小绿点、是否允许用户隐藏在线状态等）由接入方决定。
 
+### 4.9 会话设置
+
+替某个用户置顶 / 免打扰、清空记录、删除会话。含义、返回值与客户端接口（§5.10）完全相同，改的是同一份数据；成功后同样向**该用户**的所有在线设备推 `conversation_changed`（§6），对方不会收到任何通知。
+
+接入方后端手里通常是好友的 user_id 而不是会话 id，所以这组接口**按对方定位会话**：`{user_id}` 是设置归属的用户，`{peer_id}` 是对方的 user_id，客服会话写 `@cs`。
+
+| 方法 | 路径 | 请求体 | 说明 |
+|---|---|---|---|
+| GET | `/users/{user_id}/conversations/{peer_id}` | — | 查询会话设置 |
+| PUT | `/users/{user_id}/conversations/{peer_id}/settings` | `{"pinned"?: bool, "muted"?: bool}` | 置顶 / 免打扰，至少给一项 |
+| POST | `/users/{user_id}/conversations/{peer_id}/clear` | 无 | 清空该用户这一侧的记录 |
+| DELETE | `/users/{user_id}/conversations/{peer_id}` | 无 | 删除会话 |
+
+四个接口都返回会话设置对象（字段见 §5.10）：
+
+```json
+{ "conversation_id": 12, "peer_user_id": "u1002", "pinned": false, "pinned_at": null,
+  "muted": true, "clear_seq": 0, "unread": 3, "visible": true }
+```
+
+```bash
+curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1002/settings \
+  -H "X-Api-Key: imk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+  -H "Content-Type: application/json" -d '{"muted": true}'
+```
+
+- **没聊过的会话回 404 `VALIDATION`「会话不存在」**：会话在第一条消息发出时才创建，所以不能提前给没聊过的人设置免打扰。
+- 用户不必已导入（同黑名单 §4.7），只校验格式；`{user_id}` 不能是 `@cs`，`{peer_id}` 可以是。格式不合法 → 400 `VALIDATION`。
+- 会话被该用户删除后仍能查询，此时 `visible` 为 `false`，也可以照常设置免打扰、清空、再次删除；但置顶会回 404 `VALIDATION`「会话不存在」（§5.10）。
+- 其他参数错误（两项都不给、置顶超过 50 个）同 §5.10，回 400 `VALIDATION`。
+
 ## 5. 客户端接口（App / Web 调用）
 
 鉴权：请求头 `Authorization: Bearer <用户令牌>`。路径前缀 `/api/im/v1`。令牌失效统一回 401 `IM_TOKEN_INVALID`，此时向自家后端换新令牌后重试。
@@ -228,6 +264,10 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 | DELETE | `/blocks/{target}` | 解除拉黑 |
 | GET | `/blocks` | 黑名单列表 |
 | POST | `/conversations/read-all` | 一键清全部未读 |
+| PUT | `/conversations/{id}/settings` | 置顶 / 免打扰 |
+| POST | `/conversations/{id}/clear` | 清空聊天记录 |
+| DELETE | `/conversations/{id}` | 删除会话 |
+| GET | `/conversations/changes` | 会话设置增量补齐 |
 
 ### 5.1 发消息 `POST /messages`
 
@@ -260,20 +300,29 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 ### 5.2 会话列表 `GET /conversations?cursor=&limit=`
 
-- 只列出有过消息的会话，按最后一条消息时间倒序。
-- `limit` 默认 20，最大 50（超出按 50）；`cursor` 首页不传，之后传上一页返回的 `next_cursor`；`next_cursor` 为空串表示没有下一页。
+- 只列出本人列表里的会话：有过消息，且没被本人删除（§5.10）。
+- **置顶优先**：不带 `cursor` 的首页先放**全部**置顶会话（按置顶时间倒序，最多 50 个），再接 `limit` 条非置顶会话，所以首页条数可能大于 `limit`；非置顶会话按最后一条消息时间倒序。
+- `limit` 默认 20，最大 50（超出按 50），**只约束非置顶会话**；`cursor` 首页不传，之后传上一页返回的 `next_cursor`，**后续页只翻非置顶会话**，不会再出现置顶的；`next_cursor` 为空串表示没有下一页。
 
 ```json
 { "items": [ {
     "conversation_id": 12, "type": "c2c",
     "peer": { "user_id": "u1002", "nickname": "李四", "avatar_url": "https://cdn.example.com/b.png" },
     "last_message": { "seq": 37, "from": "u1002", "type": "text", "preview": "晚上见", "created_at": "2026-11-20 10:00:00" },
-    "unread": 3, "max_seq": 37, "read_seq": 34, "last_msg_at": "2026-11-20 10:00:00"
+    "unread": 3, "max_seq": 37, "read_seq": 34, "last_msg_at": "2026-11-20 10:00:00",
+    "pinned": true, "pinned_at": "2026-11-19 09:30:00", "muted": false, "clear_seq": 0
   } ],
   "next_cursor": "MTc2MzYwNDAwMDoxMg" }
 ```
 
-`last_message` 极少数情况下可能为 `null`，请判空。
+| 字段 | 说明 |
+|---|---|
+| pinned / pinned_at | 本人是否置顶、置顶时间；未置顶为 `false` / `null` |
+| muted | 本人是否免打扰。免打扰会话的 `unread` 照常计数，但不计入总未读（§5.5） |
+| clear_seq | 本人清空到的序号，拉消息只会返回比它大的 seq（§5.3）；没清空过为 `0` |
+
+`last_message` 请判空：本人清空记录后还没有新消息时为 `null`（会话仍在原位置，`unread` 为 0），极少数其他情况下也可能为 `null`。
+会话被本人删除后不在列表里，有新消息时会自动重新出现（不再置顶，免打扰保留）。
 
 ### 5.3 拉消息 `GET /conversations/{id}/messages`
 
@@ -288,6 +337,8 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 `has_more` 表示查询方向上还有更多：补拉时表示后面还有新消息，继续用最后一条的 seq 补拉；翻历史 / 最新一页时表示更早还有，用第一条的 seq 作 `before_seq` 继续翻。
 不是会话成员（或会话不存在）→ 403 `FORBIDDEN`。
 
+**清空记录或删除会话（§5.10）之后只返回 `seq > clear_seq` 的消息**，即从 `clear_seq + 1` 开始：`after_seq` 小于 `clear_seq` 时等同于传 `clear_seq`；翻历史翻到 `clear_seq + 1` 就到头，`has_more` 为 `false`；清空后还没有新消息时 `items` 为空。`clear_seq` 在会话列表（§5.2）与会话设置（§5.10）里都有。只影响本人，对方照常拉到全部消息。
+
 ### 5.4 标已读 `POST /conversations/{id}/read`
 
 请求 `{"seq": 37}`（通常传当前看到的最大 seq），返回 `{"read_seq": 37, "unread": 0}`。
@@ -295,7 +346,8 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 ### 5.5 总未读 `GET /unread`
 
-返回 `{"total": 5}`，即该用户所有会话未读之和，可用于 App 角标。
+返回 `{"total": 5}`，即该用户所有**非免打扰**会话的未读之和，可直接用于 App 角标。
+免打扰会话自己的 `unread` 照常计数，只是不计入这里（客户端可以给它显示小红点而不是数字）。与 after_send 的 `to_unread_total`（§8.2）同一口径。
 
 ### 5.6 上传图片 `POST /upload`
 
@@ -322,7 +374,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 ### 5.8 一键清全部未读 `POST /conversations/read-all`
 
-无请求体。把该用户所有会话（含客服会话）的已读位置推到各自最新一条，返回 `{"updated": 3}`，`updated` 是本次实际变更的会话数（没有未读时为 `0`）。
+无请求体。把该用户所有会话（含客服会话、免打扰会话，以及已删除不在列表里的会话）的已读位置推到各自最新一条，返回 `{"updated": 3}`，`updated` 是本次实际变更的会话数（没有未读时为 `0`）。
 `updated > 0` 时会向自己所有在线设备（含发起这次请求的设备）推**一条** `read_all` 事件（§6），不会逐会话推 `read`。
 
 ### 5.9 业务卡片 `im_card`
@@ -398,6 +450,80 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 - 普通页面（文章 / 活动）：`{"kind": "article", "title": "双 11 活动说明", "subtitle": "11 月 1 日–11 日", "web_link": "https://www.example.com/news/88"}`
 - 已有自己卡片协议的（如 `{"schema": "djx_card", "type": "order", "payload": {…}}`）：协议原样保留，在同一个 `data` 里**加一个** `im_card` 键即可，自家 App 继续按自己的协议渲染，客服工作台按 `im_card` 渲染。
 
+### 5.10 置顶、免打扰、清空与删除
+
+每个用户对自己的每个会话各自设置，**只影响本人这一侧**：对方看不到、也不会收到任何通知；消息本身不删除，对方、服务端审计查询（§4.6）和客服坐席看到的历史都不变。
+
+| 方法 | 路径 | 请求体 | 效果 |
+|---|---|---|---|
+| PUT | `/conversations/{id}/settings` | `{"pinned"?: bool, "muted"?: bool}` | 置顶 / 取消置顶、免打扰 / 取消免打扰；没给的项不变 |
+| POST | `/conversations/{id}/clear` | 无 | 清空聊天记录，会话留在列表里 |
+| DELETE | `/conversations/{id}` | 无 | 删除会话：清空聊天记录 + 移出列表 |
+
+三个接口都返回该会话当前的设置：
+
+```json
+{ "conversation_id": 12, "peer_user_id": "u1002", "pinned": true, "pinned_at": "2026-11-24 10:00:00",
+  "muted": false, "clear_seq": 0, "unread": 3, "visible": true }
+```
+
+| 字段 | 说明 |
+|---|---|
+| peer_user_id | 对方 user_id，客服会话为 `@cs` |
+| pinned / pinned_at | 是否置顶、置顶时间；未置顶为 `false` / `null` |
+| muted | 是否免打扰 |
+| clear_seq | 清空到的序号，`seq <= clear_seq` 的消息本人看不到；没清空过为 `0` |
+| unread | 该会话未读数 |
+| visible | 是否出现在本人会话列表里；删除后为 `false`，有新消息时恢复为 `true` |
+
+**置顶**：每个用户最多 50 个，超出回 400 `VALIDATION`（「置顶会话最多 50 个」）。重复置顶是幂等的，不刷新 `pinned_at`。只有出现在列表里的会话能置顶，给已删除的会话置顶回 404 `VALIDATION`「会话不存在」。
+
+**免打扰**：
+
+- 会话自己的 `unread` 照常计数，但不计入总未读 `GET /unread`（§5.5）与 after_send 的 `to_unread_total`（§8.2）。
+- 长连接的 `message` 推送不受影响，App 在前台照样收到，是否响铃、弹提示由客户端按 `muted` 决定。
+- after_send 照常回调，带 `to_muted: true`，由接入方据此不发离线推送（§8.2）。
+- 删除会话不会重置免打扰。
+
+**清空**：`clear_seq` 与 `read_seq` 推到该会话最新一条，之后拉消息只返回 `seq > clear_seq` 的消息（§5.3）；会话留在列表原位，`last_message` 为 `null`、`unread` 为 `0`。
+
+**删除**：在清空的基础上移出会话列表、取消置顶，免打扰保留。该会话之后**有任何新消息**（不管哪一方发的）就会自动重新出现，只能看到新消息，需要的话重新置顶。
+
+- 两项都不给 → 400 `VALIDATION`（「pinned 与 muted 至少给一个」）；`{id}` 不合法 → 400 `VALIDATION`；不是会话成员（或会话不存在）→ 403 `FORBIDDEN`。
+- 每次成功都会向**本人所有在线设备**（含发起设备）推一条 `conversation_changed`（§6），值没有变化也会推。接入方后端用 §4.9 的接口改设置时同样会推。
+
+**客户端本地处理**（`conversation_changed` 推送、上面三个接口的返回值、§5.11 的每一项，都是同一个对象，按同一套规则应用）：
+
+1. 用整个对象覆盖本地的会话设置，不要按 `action` 推算。
+2. `visible` 为 `false`（已删除）：从本地会话列表移除，并**删除本地该会话的全部消息**，否则会话重新出现时旧消息会跟着出来。
+3. `clear_seq` 比本地大：删除本地 `seq <= clear_seq` 的消息；会话预览若是其中一条，也一并清空。
+4. 本地入库时丢弃 `seq <= clear_seq` 的消息，避免清空之前发出的补拉请求晚到、把旧消息写回来。
+
+### 5.11 会话设置增量补齐 `GET /conversations/changes?cursor=&limit=`
+
+`conversation_changed` 推送会因设备离线而丢失，而会话列表只返回可见的会话，**不能从「列表里没有」推断出「已删除」**。所以每次连上长连接后（冷启动与断线重连都算），按上次保存的游标调一次本接口，把离线期间错过的设置补齐。
+
+返回本人改过设置（置顶、免打扰、清空、删除任一项）的会话的**当前**设置，包括已删除的会话（`visible: false`），按修改时间升序：
+
+```json
+{ "items": [
+    { "conversation_id": 12, "peer_user_id": "u1002", "pinned": false, "pinned_at": null,
+      "muted": false, "clear_seq": 37, "unread": 0, "visible": false }
+  ],
+  "next_cursor": "MTc2MzYwNDAwMA", "has_more": false }
+```
+
+| 参数 | 说明 |
+|---|---|
+| cursor | 上次返回的 `next_cursor`；第一次不传，返回全部改过设置的会话。不合法 → 400 `VALIDATION` |
+| limit | 默认 100，最大 200（超出按 200） |
+
+- `has_more` 为 `true` 时，用本次的 `next_cursor` 继续翻；为 `false` 时把 `next_cursor` **持久化保存**，下次对账带上。
+- 游标对客户端不透明，原样保存、原样传回。没有新修改时 `next_cursor` 原样返回传入值（第一次就没有任何记录时为空串，下次照样不传即可）。
+- **同一秒内的修改可能重复返回**，按 `conversation_id` 整行覆盖即可，重复应用不会出错。
+- 每项都是**当前状态**，不是变更历史：同一会话先清空再删除，只会看到删除后的状态。
+- 会话因新消息重新出现**不算**设置修改，不会出现在这里，靠 `message` 推送与会话列表（§5.2）感知。
+
 ## 6. 长连接
 
 - 地址：`wss://im.example.com/api/im/v1/connect/websocket`
@@ -414,11 +540,13 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 { "event": "message", "conversation_id": 12, "seq": 37, "message": { 消息对象 } }
 { "event": "read", "conversation_id": 12, "read_seq": 37 }
 { "event": "read_all" }
+{ "event": "conversation_changed", "action": "delete", "conversation": { 会话设置对象 } }
 ```
 
 - `message` 同时推给收发双方的所有在线设备，发送者其他设备借此同步；发送设备自己也会收到，按 `message.id`（或 `client_msg_id`）与 HTTP 返回去重。
 - `read` 只推给自己，用于多端同步角标。
 - `read_all` 只推给自己的所有在线设备（一键清全部未读，§5.8；发起设备也会收到，可忽略），不带会话信息：收到后把本地各会话未读清零，或重新拉一次会话列表。
+- `conversation_changed` 只推给自己的所有在线设备（含发起设备），用于多端同步置顶、免打扰、清空与删除（§5.10）。`action` 为 `settings`（置顶 / 免打扰）/ `clear` / `delete`，`conversation` 是完整的会话设置对象，直接覆盖本地即可，不必按 `action` 推算；本地消息怎么清理见 §5.10「客户端本地处理」。离线时漏掉的用 §5.11 补齐。
 
 **断开码**（SDK 的 disconnected 事件里的 `code`）：
 
@@ -462,13 +590,18 @@ Future<centrifuge.Client> connectIm(String token, ImStore store, ImApi api) asyn
 
   client.publication.listen((e) async {          // 服务端订阅的推送，不要自己 subscribe
     final ev = jsonDecode(utf8.decode(e.data)) as Map<String, dynamic>;
-    final convId = ev['conversation_id'] as int;
-    if (ev['event'] == 'message') {
-      final local = store.maxSeq(convId);         // 本地已有的最大 seq
-      if ((ev['seq'] as int) > local + 1) await pullAfter(store, api, convId, local); // 跳号 → 补拉
-      store.upsertMessage(ev['message']);         // 按 id 去重
-    } else if (ev['event'] == 'read') {
-      store.setReadSeq(convId, ev['read_seq'] as int);
+    switch (ev['event']) {                        // 不认识的事件忽略即可
+      case 'message':
+        final convId = ev['conversation_id'] as int;
+        final local = store.maxSeq(convId);       // 本地已有的最大 seq，不小于 clear_seq
+        if ((ev['seq'] as int) > local + 1) await pullAfter(store, api, convId, local); // 跳号 → 补拉
+        store.upsertMessage(ev['message']);       // 按 id 去重，丢弃 seq <= clear_seq 的
+      case 'read':
+        store.setReadSeq(ev['conversation_id'] as int, ev['read_seq'] as int);
+      case 'read_all':
+        store.clearAllUnread();
+      case 'conversation_changed':
+        applyConvSettings(store, ev['conversation'] as Map<String, dynamic>);
     }
   });
 
@@ -486,6 +619,30 @@ Future<void> pullAfter(ImStore store, ImApi api, int convId, int afterSeq) async
     cursor = items.last['seq'] as int;
   }
 }
+
+/// 应用一个会话设置对象：conversation_changed 推送与 /conversations/changes 补齐共用（§5.10）
+void applyConvSettings(ImStore store, Map<String, dynamic> c) {
+  final convId = c['conversation_id'] as int;
+  if (c['visible'] != true) {                     // 已删除：会话行与本地消息一起删
+    store.deleteConversation(convId);
+    return;
+  }
+  store.deleteMessagesUpTo(convId, c['clear_seq'] as int); // 清空：删 seq <= clear_seq 的消息
+  store.updateConvSettings(convId, c);            // 覆盖 pinned / pinned_at / muted / clear_seq / unread
+}
+
+/// 补齐离线期间错过的会话设置，syncAll 里拉完会话列表后调用（§7）
+Future<void> pullConvChanges(ImStore store, ImApi api) async {
+  for (;;) {
+    final cursor = store.changesCursor;           // 持久化的游标，第一次为空串
+    final r = await api.get('/conversations/changes', {if (cursor.isNotEmpty) 'cursor': cursor, 'limit': '200'});
+    for (final c in (r['items'] as List).cast<Map<String, dynamic>>()) {
+      applyConvSettings(store, c);
+    }
+    store.changesCursor = r['next_cursor'] as String; // 应用完再保存
+    if (r['has_more'] != true) break;
+  }
+}
 ```
 
 ## 7. 可靠性与同步
@@ -493,11 +650,12 @@ Future<void> pullAfter(ImStore store, ImApi api, int convId, int afterSeq) async
 - **MySQL 是唯一真相，推送只是加速。** 推送可能因断网丢失，客户端以 seq 为准自行补齐，不依赖推送必达。
 - **断线重连 / 冷启动同步**（`syncAll`）：
   1. 拉 `/conversations`，逐页比对每个会话的 `max_seq` 与本地最大 seq；遇到一整页都已追平即可停止翻页。
-  2. 对落后的会话按 `after_seq=<本地最大 seq>` 补拉（见上例）。本地从没拉过的会话，进入时拉最新一页即可，更早的用 `before_seq` 按需翻。
-  3. 用列表里的 `unread` / `read_seq` 刷新角标，或调 `/unread` 取总数。
-- **跳号检测**：收到 `message` 推送时 `seq > 本地最大 seq + 1`，说明中间漏了，补拉缺的那段。
-- **未读**：会话未读 = `max_seq − read_seq`，总未读 = 各会话之和。自己发的消息会把自己的 `read_seq` 推到该条，所以不计入自己的未读。
-- **多端同步**：同一用户可多设备同时在线；发出的消息推到自己其他设备，标已读推 `read` 事件、一键清未读推 `read_all` 事件，各端角标一起更新。
+  2. 带上次保存的游标调 `/conversations/changes`，翻到 `has_more` 为 `false`，逐项覆盖本地会话设置：离线期间被删除的会话移出列表、被清空的删掉旧消息（§5.11，见上例 `pullConvChanges`）。不能只靠列表判断：列表里没有的会话可能只是还没翻到。
+  3. 对落后的会话按 `after_seq=<本地最大 seq>` 补拉（见上例）。本地从没拉过的会话，进入时拉最新一页即可，更早的用 `before_seq` 按需翻。清空过的会话，本地最大 seq 取 `max(本地消息的最大 seq, clear_seq)`，否则会反复补拉。
+  4. 用列表里的 `unread` / `read_seq` 刷新角标，或调 `/unread` 取总数。
+- **跳号检测**：收到 `message` 推送时 `seq > 本地最大 seq + 1`，说明中间漏了，补拉缺的那段（本地最大 seq 同样不小于 `clear_seq`）。
+- **未读**：会话未读 = `max_seq − read_seq`，总未读 = 各**非免打扰**会话之和（与 `/unread` 同一口径）。清空与删除会把 `read_seq` 推到最新，所以不再计未读。自己发的消息会把自己的 `read_seq` 推到该条，所以不计入自己的未读。
+- **多端同步**：同一用户可多设备同时在线；发出的消息推到自己其他设备，标已读推 `read` 事件、一键清未读推 `read_all` 事件，置顶 / 免打扰 / 清空 / 删除推 `conversation_changed` 事件，各端会话列表与角标一起更新。离线设备漏掉的会话设置用 `/conversations/changes` 补齐（§5.11）。
 - **发送失败重试**：超时 / 网络错误时沿用同一个 `client_msg_id` 重发，结果以返回的消息对象为准。
 
 ## 8. 回调
@@ -536,16 +694,17 @@ Future<void> pullAfter(ImStore store, ImApi api, int convId, int afterSeq) async
 - `data`：
 
   ```json
-  { "message": { 消息对象 }, "conversation_id": 12, "to": "u1002", "to_online": false, "to_unread_total": 3 }
+  { "message": { 消息对象 }, "conversation_id": 12, "to": "u1002", "to_online": false, "to_muted": false, "to_unread_total": 3 }
   ```
 
   `to_online` 表示发送时接收方是否至少有一条长连接。上传图的 `message.content.url` 约 24 小时有效。
-  `to_unread_total` 是接收方此刻所有会话的未读之和（**已含这条消息**），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
+  `to_muted` 表示接收方是否对该会话开了免打扰（§5.10），为 `true` 时建议不发离线推送；`to` 为 `@cs` 时恒为 `false`；极少数查询失败的情况下该字段缺省，请按「缺省就当没开免打扰」处理。
+  `to_unread_total` 是接收方此刻所有**非免打扰**会话的未读之和（**已含这条消息**；接收方对该会话开了免打扰时，这条不计入），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
 - 成功判定：HTTP 200 且响应体 `{"code": 0}`（`code` 为数字）。
 - 失败重试：单次超时 5 秒；第 1 次失败后约 1 分钟重试，第 2 次失败后约 5 分钟重试，第 3 次失败标记为失败、不再自动重试，可在「回调记录」手动重投（重投保持原投递 id）。实际时刻按分钟对齐。
 - 请**先落库去重再处理**：以 `X-Im-Delivery-Id` 建唯一键，见过的直接回 `{"code":0}`。
 
-**离线推送建议**：`to_online === false` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
+**离线推送建议**：`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
 
 ### 8.3 验签（PHP）
 
@@ -577,7 +736,7 @@ if ($payload['event'] === 'after_send') {
         echo json_encode(['code' => 0]); exit;
     }
     $d = $payload['data'];
-    if ($d['to_online'] === false) {
+    if ($d['to_online'] === false && empty($d['to_muted'])) {   // 免打扰的会话不推
         queueOfflinePush($d['to'], $d['message']);           // 建议丢队列异步发，尽快返回
     }
     echo json_encode(['code' => 0]);
@@ -621,7 +780,9 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
 | 用户资料 | user_id `[A-Za-z0-9_-]{1,64}`；昵称 ≤64 字；头像 ≤512 字符；批量每批 1–100 个 |
 | 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB |
-| 会话列表 | 每页默认 20、最大 50 |
+| 会话列表 | 每页默认 20、最大 50；首页另含全部置顶会话 |
+| 置顶会话 | 每个用户最多 50 个，超出回 400 `VALIDATION` |
+| 会话设置增量补齐 `/conversations/changes` | 每页默认 100、最大 200 |
 | 黑名单列表 | 每页默认 50、最大 200 |
 | 拉消息 | 每页默认 30、最大 100 |
 | 令牌有效期 | 默认 168 小时，可配 1–8760 小时 |
@@ -655,13 +816,16 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 { "conversation_id": 88, "type": "service",
   "peer": { "user_id": "@cs", "nickname": "平台客服", "avatar_url": "https://…" },
   "last_message": { "seq": 12, "from": "@cs", "type": "text", "preview": "您好，很高兴为您服务…", "created_at": "2026-11-20 10:00:00" },
-  "unread": 1, "max_seq": 12, "read_seq": 11, "last_msg_at": "2026-11-20 10:00:00" }
+  "unread": 1, "max_seq": 12, "read_seq": 11, "last_msg_at": "2026-11-20 10:00:00",
+  "pinned": false, "pinned_at": null, "muted": false, "clear_seq": 0 }
 ```
 
-- `type` 为 `"service"`（普通单聊为 `"c2c"`），`peer.user_id` 固定为 `"@cs"`；`nickname` / `avatar_url` 取站点后台「客服设置」里的客服名称与头像（默认「平台客服」、无头像）。建议把它置顶或单独做入口。
-- 每个用户与 `@cs` **只有一条长期会话**，历次咨询的消息都在这一条里按 seq 连续排列，不会因为接待结束换新会话。
+- `type` 为 `"service"`（普通单聊为 `"c2c"`），`peer.user_id` 固定为 `"@cs"`；`nickname` / `avatar_url` 取站点后台「客服设置」里的客服名称与头像（默认「平台客服」、无头像）。它和普通会话一样按消息时间排序，建议给它单独做入口，或引导用户置顶（§5.10）。
+- 每个用户与 `@cs` **只有一条长期会话**，历次咨询的消息都在这一条里按 seq 连续排列，不会因为接待结束换新会话。用户清空或删除后，自己只看得到之后的消息，坐席工作台里的历史不受影响。
 - 客服发来的消息 `from` 均为 `"@cs"`，不暴露是哪位坐席回复的；不同坐席、系统提示在客户端看来都是「平台客服」。
 - 进入会话、补拉、标已读直接用这条会话的 `conversation_id` 调 §5.3 / §5.4。
+- **能置顶、免打扰、清空、删除**，用法同普通会话（§5.10）；接入方后端用 §4.9 的接口时 `{peer_id}` 写 `@cs`。这些只影响用户自己的列表和历史，接待、排队、坐席工作台与接待记录照旧。
+- **删除后可能在用户没有任何操作时重新出现**：坐席回复、欢迎语、转接提示、接待超时提示（§10.3）、评价邀请（§10.5）都是 `@cs` 发来的新消息，会让会话自动回到列表。这与「对方发来新消息，会话重新出现」是同一条规则，不必特殊处理。
 
 ### 10.3 提示语都是普通消息
 
@@ -726,12 +890,12 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 方向 | `data.message.from` | `data.to` | `data.to_online` | 处理建议 |
 |---|---|---|---|---|
 | 用户 → 客服 | 用户 user_id | `"@cs"` | 恒为 `false` | **跳过离线推送**：`@cs` 不是真实用户，没有设备可推；坐席端由客服工作台自己提醒 |
-| 客服 → 用户（坐席回复、提示语、评价邀请） | `"@cs"` | 用户 user_id | 发送时用户是否在线 | 与普通消息相同：`to_online === false` 时给 `to` 发离线推送，标题可用客服名称，文字用会话预览口径 |
+| 客服 → 用户（坐席回复、提示语、评价邀请） | `"@cs"` | 用户 user_id | 发送时用户是否在线 | 与普通消息相同：`to_online === false` 且 `to_muted` 不为 `true` 时给 `to` 发离线推送，标题可用客服名称，文字用会话预览口径 |
 
-按 §8.3 的示例改一行即可：
+`data.to_muted` 在用户 → 客服方向恒为 `false`，客服 → 用户方向是用户对客服会话的免打扰设置。按 §8.3 的示例改一行即可：
 
 ```php
-if ($d['to'] !== '@cs' && $d['to_online'] === false) {
+if ($d['to'] !== '@cs' && $d['to_online'] === false && empty($d['to_muted'])) {
     queueOfflinePush($d['to'], $d['message']);
 }
 ```
@@ -742,7 +906,7 @@ if ($d['to'] !== '@cs' && $d['to_online'] === false) {
 
 公开仓库 <https://github.com/guokit/im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
 
-- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。
+- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。
 - **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
 - 两者先以 git 依赖分发，安装方式见仓库 README。
 
