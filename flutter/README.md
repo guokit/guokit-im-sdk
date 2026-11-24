@@ -111,7 +111,7 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 客服就是对方为 `@cs` 的会话（`type` 为 `service`），收发与普通单聊相同。
 - 状态条：进入客服会话、收到 `@cs` 新消息时各调一次 `csState()`，`status == ImCsStatus.queued` 时显示「前面还有 `queuePosition - 1` 位」。服务端不推送状态变化
 - 机器人：站点开了机器人时，新咨询先由机器人答，`csState()` 为 `ImCsStatus.bot`，这时可放「转人工」按钮调 `handoffCs()`（返回转完的状态）；用户发「转人工」等关键词、机器人答不了时也会自动转。机器人的消息 `msg.isBot` 为 true，内容由 AI 生成，**界面上要标识**（如「AI 生成」）。`msg.senderRole` 还有 `agent`（坐席）、`system`（系统提示），为 null 的按坐席显示
-- 留言（需服务端 v1.13.0）：`csState().canLeave` 为 true（排队中、没有客服在、站点开了留言）时给一个「留联系方式」的表单，提交调 `leaveCs(name: …, phone: …, email: …)`，电话与邮箱至少一项；留言内容不用填，就是用户这次在会话里说的话。返回单号，同时会收到一条带单号的系统消息，这次排队结束，请再调一次 `csState()`。本地能判断的格式问题抛 `ArgumentError`；抛 `ImApiException` 时直接显示 `message`，其中 `IM_RATE_LIMITED` 是每小时 5 次，**不要自动重试**。只想提示「客服都不在」的看 `agentsOnline`
+- 留言（需服务端 v1.13.0）：`csState().canLeave` 为 true（排队中、没有客服在、站点开了留言）时给一个「留联系方式」的表单，提交调 `leaveCs(name: …, phone: …, email: …)`，电话与邮箱至少一项；留言内容不用填，就是用户这次在会话里说的话。返回单号，同时会收到一条带单号的系统消息，这次排队结束，请再调一次 `csState()`。本地能判断的格式问题抛 `ArgumentError`；抛 `ImApiException` 时，`VALIDATION`、`IM_RATE_LIMITED` 直接显示 `message`，其余（断网、旧服务端等）提示稍后再试；`IM_RATE_LIMITED` 是每小时 5 次，**不要自动重试**。只想提示「客服都不在」的看 `agentsOnline`
 - 评价卡片：消息满足 `type == 'custom' && content['data']['kind'] == 'imcs_rating'` 时渲染成 1–5 星卡片，提交调 `rateCs((content['data']['session_id'] as num).toInt(), rating, comment: …)`；评分越界或评语超过 200 字时 SDK 直接抛 `ArgumentError`，请在输入框限住字数。评价成功，或抛 `ImApiException`（`code == 'VALIDATION'`，即「无法评价」：已评过或接待未结束）时，都把卡片置为「已评价」
 
 **图片显示不出来？**

@@ -422,7 +422,7 @@ class GuokitIm {
   ///
   /// 抛 [ImApiException]：`VALIDATION`（有坐席在、还没说过话、留言已处理完、格式不对；没装工单或没开留言时
   /// `httpStatus` 为 404），直接显示 `message`；`IM_RATE_LIMITED` 是每小时 5 次，**不要按
-  /// [ImApiException.isTemporary] 自动重试**。需要 IM 服务端 v1.13.0 及以上。
+  /// [ImApiException.isTemporary] 自动重试**；其余的提示稍后再试。需要 IM 服务端 v1.13.0 及以上。
   Future<String> leaveCs({String? name, String? phone, String? email}) {
     final n = name?.trim() ?? '';
     final p = phone?.trim() ?? '';

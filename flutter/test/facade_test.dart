@@ -53,6 +53,7 @@ void main() {
   late MemoryImStore store;
   late FakeRealtime rt;
   late List<String> requests;
+  var leaveBody = '';
   late Map<int, int> serverMax;
 
   // 服务端的会话设置：changed 里有的会话会出现在 changes 里（cursor 固定为 'k1'）。
@@ -141,7 +142,10 @@ void main() {
             r'/conversations/(\d+)/messages',
           ).firstMatch(req.url.path);
           Object data;
-          if (m != null) {
+          if (req.url.path.endsWith('/leave')) {
+            leaveBody = req.body;
+            data = {'ticket_no': 'T1'};
+          } else if (m != null) {
             final conv = int.parse(m.group(1)!);
             final q = req.url.queryParameters;
             final floor = max(clearOf(conv), int.parse(q['after_seq'] ?? '0'));
@@ -364,8 +368,13 @@ void main() {
     expect(requests.length, before);
   });
 
-  test('leaveCs 联系方式不合要求直接抛 ArgumentError，不发请求', () async {
+  test('leaveCs 去空白后提交并返回单号；不合要求直接抛 ArgumentError，不发请求', () async {
     await im.login('u1');
+    expect(await im.leaveCs(name: ' 张三 ', phone: ' 138 0000 0000 '), 'T1');
+    expect(jsonDecode(leaveBody), {
+      'contact_name': '张三',
+      'contact_phone': '138 0000 0000',
+    });
     final before = requests.length;
     expect(() => im.leaveCs(name: '张三', phone: ' '), throwsArgumentError);
     expect(() => im.leaveCs(phone: '12a45'), throwsArgumentError);
