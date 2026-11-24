@@ -72,6 +72,7 @@ class ImMessage {
     required this.createdAt,
     this.localPath,
     this.urlFetchedAt,
+    this.senderRole,
   });
 
   /// 解析服务端消息对象（发消息返回、拉消息列表、推送里的 `message`）。
@@ -100,6 +101,7 @@ class ImMessage {
       urlFetchedAt: content.containsKey('attachment_id')
           ? DateTime.now().toUtc()
           : null,
+      senderRole: json['sender_role'] as String?,
     );
   }
 
@@ -122,6 +124,7 @@ class ImMessage {
     urlFetchedAt: json['url_fetched_at'] == null
         ? null
         : _fromMs(json['url_fetched_at']),
+    senderRole: json['sender_role'] as String?,
   );
 
   /// 服务端消息 id；本地「发送中 / 失败」时为 null。
@@ -164,6 +167,14 @@ class ImMessage {
   /// 其余消息为 null。
   final DateTime? urlFetchedAt;
 
+  /// 平台客服（`@cs`）消息的发送者：`agent` 坐席 / `bot` 机器人 / `system` 系统提示；
+  /// 普通消息为 null。旧版服务端、以及升级 SDK 前已缓存在本地的客服消息也是 null，按坐席显示即可。
+  /// 保留字符串，服务端将来加取值时不至于解析失败，不认识的按 `system` 处理。
+  final String? senderRole;
+
+  /// 是否机器人发的。内容由 AI 生成，**界面上要向用户标识**（如「AI 生成」）。
+  bool get isBot => senderRole == 'bot';
+
   /// 业务卡片（接入文档 §5.9）：custom 消息的 `content['data']['im_card']`；
   /// 不是 custom、没带卡片或卡片缺 `title` 时为 null，调用方退回显示 `desc`（格式由服务端发送时把关）。
   ImCard? get card =>
@@ -186,6 +197,7 @@ class ImMessage {
     DateTime? createdAt,
     Object? localPath = _unset,
     Object? urlFetchedAt = _unset,
+    Object? senderRole = _unset,
   }) => ImMessage(
     id: identical(id, _unset) ? this.id : id as int?,
     clientMsgId: clientMsgId ?? this.clientMsgId,
@@ -212,6 +224,9 @@ class ImMessage {
     urlFetchedAt: identical(urlFetchedAt, _unset)
         ? this.urlFetchedAt
         : urlFetchedAt as DateTime?,
+    senderRole: identical(senderRole, _unset)
+        ? this.senderRole
+        : senderRole as String?,
   );
 
   /// SDK 内部格式（存储层用）：`content` 仍是 Map，`created_at` 为 UTC 毫秒时间戳，`status` 为枚举名。
@@ -231,6 +246,7 @@ class ImMessage {
     'created_at': createdAt.millisecondsSinceEpoch,
     'local_path': localPath,
     'url_fetched_at': urlFetchedAt?.millisecondsSinceEpoch,
+    'sender_role': senderRole,
   };
 
   @override
@@ -323,7 +339,7 @@ class ImCard {
   /// 网站、H5、客服工作台用（https）。
   final String? webLink;
 
-  /// 原生 App 内跳转用，例如 `djx://order/1`。
+  /// 原生 App 内跳转用，例如 `example://order/1`。
   final String? appLink;
 
   /// 小程序页面路径，例如 `/pages/order/detail?id=1`。
@@ -555,6 +571,9 @@ class ImBlockItem {
 enum ImCsStatus {
   /// 当前没有进行中的咨询。
   none,
+
+  /// 机器人接待中，可以放「转人工」按钮（见 `GuokitIm.handoffCs`）。
+  bot,
 
   /// 排队中。
   queued,

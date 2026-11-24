@@ -50,6 +50,7 @@ CREATE TABLE messages (
   created_at INTEGER NOT NULL,
   local_path TEXT,
   url_fetched_at INTEGER,
+  sender_role TEXT,
   UNIQUE (from_id, client_msg_id)
 )''',
   'CREATE INDEX idx_messages_conv_seq ON messages (conversation_id, seq)',
@@ -68,6 +69,9 @@ const _upgradeV2 = [
   'ALTER TABLE conversations ADD COLUMN clear_seq INTEGER NOT NULL DEFAULT 0',
   _metaSchema,
 ];
+
+/// v2 → v3（客服消息的发送者角色）。
+const _upgradeV3 = ['ALTER TABLE messages ADD COLUMN sender_role TEXT'];
 
 /// 库文件名：userId 里 `[A-Za-z0-9_-]` 以外的字符换成 `_`。
 String sqliteFileName(String userId) =>
@@ -112,7 +116,7 @@ class SqliteImStore implements ImStore {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onCreate: (db, _) async {
           for (final sql in _schema) {
             await db.execute(sql);
@@ -121,6 +125,11 @@ class SqliteImStore implements ImStore {
         onUpgrade: (db, from, _) async {
           if (from < 2) {
             for (final sql in _upgradeV2) {
+              await db.execute(sql);
+            }
+          }
+          if (from < 3) {
+            for (final sql in _upgradeV3) {
               await db.execute(sql);
             }
           }
@@ -206,6 +215,7 @@ class SqliteImStore implements ImStore {
     'created_at': m.createdAt.millisecondsSinceEpoch,
     'local_path': m.localPath,
     'url_fetched_at': m.urlFetchedAt?.millisecondsSinceEpoch,
+    'sender_role': m.senderRole,
   };
 
   ImMessage _msg(Map<String, Object?> r) {
@@ -233,6 +243,7 @@ class SqliteImStore implements ImStore {
       urlFetchedAt: fetched == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(fetched, isUtc: true),
+      senderRole: r['sender_role'] as String?,
     );
   }
 

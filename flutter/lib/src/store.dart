@@ -142,6 +142,7 @@ ImMessage mergeMessage(ImMessage existing, ImMessage incoming) {
     to: incoming.to.isEmpty ? existing.to : incoming.to,
     localPath: incoming.localPath ?? existing.localPath,
     urlFetchedAt: incoming.urlFetchedAt ?? existing.urlFetchedAt,
+    senderRole: incoming.senderRole ?? existing.senderRole,
   );
 }
 

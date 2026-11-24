@@ -12,7 +12,7 @@
     { "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }
   ],
   "require": {
-    "guokit/im": "^0.5"
+    "guokit/im": "^0.6"
   }
 }
 ```
@@ -89,9 +89,12 @@ if ($event->name === 'before_send') {
     echo containsBannedWords($event->data) ? Callback::reject('含违规内容') : Callback::allow();
 } else {
     // after_send：先按 X-Im-Delivery-Id 落库去重，再处理
-    // $event->data['to_muted'] 为 true 表示接收方对该会话开了免打扰，不要推离线
-    if (!($event->data['to_muted'] ?? false)) {
-        // pushOffline(...)
+    // 只给自己的用户推离线：to_source 为 visitor 的是网页访客（没有设备）、service 是平台客服；
+    // 旧版服务端没有该字段，所以 @cs 仍单独排除。to_muted 为 true 表示接收方开了免打扰
+    $d = $event->data;
+    if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs'
+        && ($d['to_online'] ?? null) === false && !($d['to_muted'] ?? false)) {
+        // pushOffline(...)；$d['message']['sender_role'] === 'bot' 的内容由 AI 生成
     }
     echo Callback::ack();
 }

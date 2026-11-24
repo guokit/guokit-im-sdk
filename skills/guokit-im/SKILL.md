@@ -26,7 +26,7 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 2. 存量用户 `POST /server/users/batch` 批量导入（每批 ≤100）；注册、改昵称头像时 `PUT /server/users/{user_id}`。user_id 用自家用户主键字符串，满足 `[A-Za-z0-9_-]{1,64}`。
 3. 用户登录时 `POST /server/users/{user_id}/token`，把 `token` 与 `expires_at` 交给客户端；客户端令牌失效时找后端换。
 4. 自家封号 → `PATCH /server/users/{user_id}` `{"status":0}`；退出全部设备 → `POST .../kick`；自家拉黑 → `PUT /server/users/{user_id}/blocks/{target}`。
-5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿 `to_online` 决定是否走厂商推送。
+5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送。
 
 客户端：
 1. 拿到令牌后连 `wss://<IM 域名>/api/im/v1/connect/websocket`（Centrifuge 协议，用官方 SDK：Flutter `centrifuge`、Web `centrifuge`）。
@@ -53,7 +53,7 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 13. **不要在客户端 `newSubscription` / 订阅频道**：服务端已自动订阅专属频道，客户端订阅会被拒绝。
 14. **收到 `read_all` 要把所有会话未读清零**（或重拉会话列表），它不会附带各会话的 `read_seq`。
 15. **`IM_BLOCKED` 是业务结果不是故障**：对方拉黑了发送者，提示「消息已发出，但被对方拒收了」，不要重试。
-16. **平台客服是固定联系人 `@cs`**：只能由用户本人从客户端发给它；服务端代发的 from / to 不能是 `@cs`，也不能拉黑 `@cs`。
+16. **平台客服是固定联系人 `@cs`**：只能由用户本人从客户端发给它；服务端代发的 from / to 不能是 `@cs`，也不能拉黑 `@cs`。它的消息带 `sender_role`，`bot` 的要向用户标识为 AI 生成。
 
 ## 选型提示
 

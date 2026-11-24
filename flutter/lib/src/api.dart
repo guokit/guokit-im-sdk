@@ -255,6 +255,11 @@ class ImApi {
     _asMap(await _json('GET', '/state', prefix: _csPrefix)),
   );
 
+  /// `POST /api/imcs/v1/handoff`：转人工，返回转完的接待状态；没有机器人接待时返回当前状态。
+  Future<ImCsState> csHandoff() async => ImCsState.fromServer(
+    _asMap(await _json('POST', '/handoff', prefix: _csPrefix)),
+  );
+
   /// `POST /api/imcs/v1/sessions/{id}/rating`：评价一次已结束的接待，[sessionId] 取评价邀请消息的
   /// `content.data.session_id`。重复评价、评别人的或未结束的回 400 `VALIDATION`（「无法评价」）。
   Future<void> csRate(int sessionId, int rating, {String? comment}) => _json(

@@ -76,6 +76,8 @@
 }
 ```
 
+平台客服 `@cs` 的消息另带 `sender_role`，见 §10.2。
+
 ## 4. 服务端接口（接入方后端调用）
 
 鉴权：请求头 `X-Api-Key: <API Key>`。路径前缀 `/api/im/v1/server`。
@@ -400,7 +402,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
         "subtitle": "云仓自营",
         "image": "https://cdn.example.com/p/123.jpg",
         "fields": [
-          { "label": "订单号", "value": "DJX20261123001" },
+          { "label": "订单号", "value": "SO20261123001" },
           { "label": "状态", "value": "待发货" },
           { "label": "实付", "value": "¥128.00" }
         ],
@@ -448,7 +450,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 
 - 商品：`{"kind": "product", "title": "有机大米 5kg", "image": "https://…", "fields": [{"label": "价格", "value": "¥64.00"}], "web_link": "https://shop.example.com/p/123", "mp_path": "/pages/product/detail?id=123"}`
 - 普通页面（文章 / 活动）：`{"kind": "article", "title": "双 11 活动说明", "subtitle": "11 月 1 日–11 日", "web_link": "https://www.example.com/news/88"}`
-- 已有自己卡片协议的（如 `{"schema": "djx_card", "type": "order", "payload": {…}}`）：协议原样保留，在同一个 `data` 里**加一个** `im_card` 键即可，自家 App 继续按自己的协议渲染，客服工作台按 `im_card` 渲染。
+- 已有自己卡片协议的（如 `{"schema": "my_card", "type": "order", "payload": {…}}`）：协议原样保留，在同一个 `data` 里**加一个** `im_card` 键即可，自家 App 继续按自己的协议渲染，客服工作台按 `im_card` 渲染。
 
 ### 5.10 置顶、免打扰、清空与删除
 
@@ -677,7 +679,7 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 - 时机：开启发送前回调且配了地址时，每条新消息在通过参数校验、幂等检查与限速之后、**入库之前**调用。服务端代发（§4.5）同样触发，可按 `from` 自行放行。
 - 超时 2 秒，不重试。
-- `data`：`{from, to, type, content, client_msg_id}`；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，不含 ticket 与链接）。
+- `data`：`{from, to, type, content, client_msg_id, from_source, to_source}`（来源取值见 §8.5）；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，不含 ticket 与链接）。
 - 期望响应：HTTP 200 且
 
   ```json
@@ -694,9 +696,11 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 - `data`：
 
   ```json
-  { "message": { 消息对象 }, "conversation_id": 12, "to": "u1002", "to_online": false, "to_muted": false, "to_unread_total": 3 }
+  { "message": { 消息对象 }, "conversation_id": 12, "to": "u1002", "to_online": false, "to_muted": false, "to_unread_total": 3,
+    "from_source": "app", "to_source": "app" }
   ```
 
+  `from_source` / `to_source` 是收发双方的来源，见 §8.5。
   `to_online` 表示发送时接收方是否至少有一条长连接。上传图的 `message.content.url` 约 24 小时有效。
   `to_muted` 表示接收方是否对该会话开了免打扰（§5.10），为 `true` 时建议不发离线推送；`to` 为 `@cs` 时恒为 `false`；极少数查询失败的情况下该字段缺省，请按「缺省就当没开免打扰」处理。
   `to_unread_total` 是接收方此刻所有**非免打扰**会话的未读之和（**已含这条消息**；接收方对该会话开了免打扰时，这条不计入），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
@@ -704,7 +708,7 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 - 失败重试：单次超时 5 秒；第 1 次失败后约 1 分钟重试，第 2 次失败后约 5 分钟重试，第 3 次失败标记为失败、不再自动重试，可在「回调记录」手动重投（重投保持原投递 id）。实际时刻按分钟对齐。
 - 请**先落库去重再处理**：以 `X-Im-Delivery-Id` 建唯一键，见过的直接回 `{"code":0}`。
 
-**离线推送建议**：`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
+**离线推送建议**：`to_source` 为 `app`、`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
 
 ### 8.3 验签（PHP）
 
@@ -736,7 +740,7 @@ if ($payload['event'] === 'after_send') {
         echo json_encode(['code' => 0]); exit;
     }
     $d = $payload['data'];
-    if ($d['to_online'] === false && empty($d['to_muted'])) {   // 免打扰的会话不推
+    if (($d['to_source'] ?? 'app') === 'app' && $d['to_online'] === false && empty($d['to_muted'])) {   // 客服、访客与免打扰的会话不推
         queueOfflinePush($d['to'], $d['message']);           // 建议丢队列异步发，尽快返回
     }
     echo json_encode(['code' => 0]);
@@ -760,10 +764,10 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 - `data`：
 
 ```json
-{ "user_id": "u1001", "online": false, "at": "2026-11-23 12:00:00", "ts": 1795392000123 }
+{ "user_id": "u1001", "online": false, "at": "2026-11-23 12:00:00", "ts": 1795392000123, "source": "app" }
 ```
 
-`at` 为东八区时间；`ts` 为毫秒时间戳，用来判断先后。
+`at` 为东八区时间；`ts` 为毫秒时间戳，用来判断先后；`source` 是用户来源，见 §8.5，极少数查询失败时缺省。
 
 **按「状态」处理，不要按「切换」处理**：
 
@@ -772,12 +776,25 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 - 下线回调比实际断开晚约 30 秒，再加投递耗时。
 - 开关中途打开：打开前已在线的用户不补发上线，但他们断开时照样会推下线；若断开后 30 秒内重连，会补推一次上线。开关关闭后，已经排队的回调照常投递。
 
+### 8.5 用户来源
+
+| 取值 | 含义 | 出现在 |
+|---|---|---|
+| `app` | 接入方自己导入的用户 | `from_source` / `to_source` / `source` |
+| `visitor` | 网页访客：站点开放网页客服时由站点自己建的匿名用户，**不在接入方的用户体系里** | `from_source` / `to_source` / `source` |
+| `service` | 平台客服 `@cs` | `from_source` / `to_source` |
+
+- 访客只能与 `@cs` 往来：普通用户、服务端代发都不能给访客发消息，也不能给访客签令牌，一律回 `IM_USER_NOT_FOUND`。
+- 访客的消息与上下线照常走三种回调，内容审核、归档可沿用同一套逻辑；**不要给访客发离线推送**（没有设备），也不要拿访客的 user_id 去自己的用户表里查。
+- 站点没开放网页客服时不会出现 `visitor`。字段缺省（旧版本服务端）按 `app` 处理；将来可能增加取值，不认识的按「不是自己的用户」处理。
+
 ## 9. 限制与配额
 
 | 项 | 上限 |
 |---|---|
 | 接入应用调用服务端接口 | 每应用每分钟 600 次、每天 200000 次（进程内计数，按自然分钟 / 自然日清零），超出回 `IM_RATE_LIMITED` |
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
+| 网页访客 | 每天发 200 条消息、上传 20 张图，超出回 `IM_RATE_LIMITED`；只能发文字与上传的图片 |
 | 用户资料 | user_id `[A-Za-z0-9_-]{1,64}`；昵称 ≤64 字；头像 ≤512 字符；批量每批 1–100 个 |
 | 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB |
 | 会话列表 | 每页默认 20、最大 50；首页另含全部置顶会话 |
@@ -822,7 +839,8 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 - `type` 为 `"service"`（普通单聊为 `"c2c"`），`peer.user_id` 固定为 `"@cs"`；`nickname` / `avatar_url` 取站点后台「客服设置」里的客服名称与头像（默认「平台客服」、无头像）。它和普通会话一样按消息时间排序，建议给它单独做入口，或引导用户置顶（§5.10）。
 - 每个用户与 `@cs` **只有一条长期会话**，历次咨询的消息都在这一条里按 seq 连续排列，不会因为接待结束换新会话。用户清空或删除后，自己只看得到之后的消息，坐席工作台里的历史不受影响。
-- 客服发来的消息 `from` 均为 `"@cs"`，不暴露是哪位坐席回复的；不同坐席、系统提示在客户端看来都是「平台客服」。
+- 客服发来的消息 `from` 均为 `"@cs"`，不暴露是哪位坐席回复的。
+- **`@cs` 的消息多带一个 `sender_role`**（拉取、推送、回调都有，普通消息没有）：`agent` 坐席回复 / `bot` 机器人回复 / `system` 系统提示。`bot` 的内容由 AI 生成，**界面上要向用户标识**（如「AI 生成」）。将来可能增加取值，不认识的按 `system` 处理。
 - 进入会话、补拉、标已读直接用这条会话的 `conversation_id` 调 §5.3 / §5.4。
 - **能置顶、免打扰、清空、删除**，用法同普通会话（§5.10）；接入方后端用 §4.9 的接口时 `{peer_id}` 写 `@cs`。这些只影响用户自己的列表和历史，接待、排队、坐席工作台与接待记录照旧。
 - **删除后可能在用户没有任何操作时重新出现**：坐席回复、欢迎语、转接提示、接待超时提示（§10.3）、评价邀请（§10.5）都是 `@cs` 发来的新消息，会让会话自动回到列表。这与「对方发来新消息，会话重新出现」是同一条规则，不必特殊处理。
@@ -833,6 +851,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 | 时机 | 内容（站点后台可改） |
 |---|---|
+| 机器人转人工 | 默认「正在为您转接人工客服」 |
 | 分配到坐席 | 欢迎语，默认「您好，很高兴为您服务，请问有什么可以帮您？」 |
 | 有坐席在线但都满额 | 排队提示，默认「当前咨询人数较多，您前面还有 {n} 位，请稍候。」（`{n}` 已替换为数字） |
 | 无坐席在线 | 离线提示，默认「客服暂时不在线，请留言说明问题，我们上线后会尽快回复您。」 |
@@ -851,11 +870,13 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 | 字段 | 说明 |
 |---|---|
-| status | `none`（当前没有进行中的咨询）/ `queued`（排队中）/ `active`（坐席接待中） |
+| status | `none`（当前没有进行中的咨询）/ `bot`（机器人接待中）/ `queued`（排队中）/ `active`（坐席接待中） |
 | session_id | 当前这次接待的 id；`none` 时为 `0` |
 | queue_position | 排队名次（含自己，排第一位为 `1`）；非 `queued` 时为 `0` |
 
-服务端不推送状态变化。建议在进入客服会话、以及收到 `@cs` 新消息时刷新一次即可。
+服务端不推送状态变化。建议在进入客服会话、以及收到 `@cs` 新消息时刷新一次即可。不认识的 `status` 按 `none` 处理。
+
+**机器人与转人工**：站点开了机器人时，新咨询先由机器人回答（`sender_role` 为 `bot`，见 §10.2）。以下情况自动转人工：用户发送转人工关键词（站点后台可配，默认「转人工」「人工客服」）、机器人答不了或调用失败、用户发图片、用量到上限。也可以在 `status` 为 `bot` 时放一个「转人工」按钮，调 `POST /api/imcs/v1/handoff`（无请求体，鉴权同上），返回转完的状态，形状同本接口。机器人接待期间长时间没有新消息会自动结束，不发评价邀请。
 
 ### 10.5 评价 `POST /api/imcs/v1/sessions/{id}/rating`
 
@@ -895,12 +916,48 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 `data.to_muted` 在用户 → 客服方向恒为 `false`，客服 → 用户方向是用户对客服会话的免打扰设置。按 §8.3 的示例改一行即可：
 
 ```php
-if ($d['to'] !== '@cs' && $d['to_online'] === false && empty($d['to_muted'])) {
+if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'] === false && empty($d['to_muted'])) {
     queueOfflinePush($d['to'], $d['message']);
 }
 ```
 
 客服发出的消息**不经过 before_send**（坐席是站点自己人），所以 before_send 里只会看到用户发给 `@cs` 的方向。
+
+### 10.7 网页客服
+
+站点自带一个可嵌入的客服窗口，接入方网站放一行脚本即可，不用自己写聊天界面（`im.example.com` 换成你的 IM 站点域名）：
+
+```html
+<script src="https://im.example.com/imcs-widget/loader.js" async></script>
+```
+
+- **先在后台加白名单**：「客服坐席 → 网页客服 → 允许嵌入的网站」填你的网站来源（如 `https://www.example.com`，不带路径）。不在名单里的网站打不开窗口。
+- **没登录的访客**：后台打开「允许没登录的访客咨询」后可用，来源为 `visitor`（§8.5）。身份记在浏览器本地，清除浏览器数据后会变成新访客；同一个人在不同网站域名下是两个访客。访客只能发文字和图片。
+- **已登录用户**：你的后端调 §4.3 给该用户签 IM 令牌，交给页面，与该用户在其他端是**同一条**客服会话：
+
+```html
+<script>
+  window.GuokitCSConfig = {
+    token: "后端签的用户令牌",          // 没登录就不传
+    onTokenExpired: async () => {        // 令牌过期时回调：换新的再交回来
+      GuokitCS.setToken(await fetchImTokenFromYourBackend())
+    },
+    color: "#2563eb",                    // 可选，按钮颜色
+  }
+</script>
+<script src="https://im.example.com/imcs-widget/loader.js" async></script>
+```
+
+| 方法 | 说明 |
+|---|---|
+| `GuokitCS.open()` / `GuokitCS.close()` | 打开 / 收起窗口，可绑到你自己的按钮上 |
+| `GuokitCS.setToken(token)` | 登录后传令牌；退出登录传空串，回到访客 |
+
+脚本是异步加载的，调用前先判断 `window.GuokitCS` 是否存在。窗口里机器人的消息标「AI 生成」。
+
+**站点部署要求**：反向代理要把 Host（含端口）原样传给 IM 服务，否则窗口里的长连接会被来源校验拒绝；要传真实客户端 IP（`X-Forwarded-For`，且反向代理与 IM 同机），否则所有访客会共用一个新建限额。
+
+**合规提示**：对公众提供 AI 客服前，请由运营方自行确认生成式 AI 服务的备案 / 登记、内容标识与隐私告知义务。
 
 ## 11. SDK、接口规范与 AI 接入
 

@@ -76,6 +76,29 @@ void main() {
     );
   });
 
+  test('转人工走 /api/imcs/v1/handoff；不认识的状态按 none', () async {
+    var status = 'bot';
+    final seen = <String>[];
+    final api = ImApi(
+      baseUrl: 'https://im.example.com',
+      tokens: TokenManager(() async => ImToken('t', _week)),
+      client: MockClient((req) async {
+        seen.add('${req.method} ${req.url.path}');
+        if (req.method == 'POST') status = 'queued';
+        return _res({
+          'code': 0,
+          'message': 'ok',
+          'data': {'status': status, 'session_id': 1, 'queue_position': 0},
+        });
+      }),
+    );
+    expect((await api.csState()).status, ImCsStatus.bot);
+    expect((await api.csHandoff()).status, ImCsStatus.queued);
+    status = 'someday';
+    expect((await api.csState()).status, ImCsStatus.none);
+    expect(seen[1], 'POST /api/imcs/v1/handoff');
+  });
+
   test('客服接口走 /api/imcs/v1：取状态、评价，「无法评价」抛 VALIDATION', () async {
     final seen = <String>[];
     final api = ImApi(

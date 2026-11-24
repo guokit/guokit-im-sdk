@@ -946,8 +946,8 @@ paths:
                         properties:
                           status:
                             type: string
-                            enum: [none, queued, active]
-                            description: none 当前没有进行中的咨询；queued 排队中；active 坐席接待中
+                            enum: [none, bot, queued, active]
+                            description: none 当前没有进行中的咨询；bot 机器人接待中；queued 排队中；active 坐席接待中。不认识的取值按 none 处理
                           session_id:
                             type: integer
                             format: int64
@@ -956,6 +956,75 @@ paths:
                             type: integer
                             format: int64
                             description: 排队名次（含自己，排第一为 1）；非 queued 时为 0
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/visitor:
+    post:
+      tags: [客服]
+      operationId: csVisitor
+      summary: 网页访客换令牌
+      description: |
+        网页客服挂件用，不需要令牌，不支持跨域调用。带上次返回的 `visitor_key` 认回同一访客；没带或无效则新建一个访客（按 IP 与全站限额）。
+        返回的 `token` 是普通用户令牌，只能与 `@cs` 往来。站点没开放网页客服回 404 `VALIDATION`；超过限额回 `IM_RATE_LIMITED`；访客已被封禁回 `IM_USER_DISABLED`（后两者 HTTP 200）。
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visitor_key: { type: string, description: 上次返回的 visitor_key，存在浏览器本地 }
+      responses:
+        '200':
+          description: 成功返回访客与令牌；业务失败见说明。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [user_id, token, expires_at, visitor_key]
+                        properties:
+                          user_id: { type: string }
+                          token: { type: string }
+                          expires_at: { $ref: '#/components/schemas/DateTime' }
+                          visitor_key: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/handoff:
+    post:
+      tags: [客服]
+      operationId: csHandoff
+      summary: 转人工
+      description: 无请求体。机器人接待中时转给人工（排队或直接分配），返回转完的接待状态；当前没有机器人接待时不做任何事，返回当前状态。站点客服不可用时回 400 `VALIDATION`。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回接待状态，形状同 `GET /api/imcs/v1/state`。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [status, session_id, queue_position]
+                        properties:
+                          status: { type: string, enum: [none, bot, queued, active] }
+                          session_id: { type: integer, format: int64 }
+                          queue_position: { type: integer, format: int64 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/LicenseError' }
@@ -1409,6 +1478,10 @@ components:
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
         client_msg_id: { type: string }
+        sender_role:
+          type: string
+          enum: [agent, bot, system]
+          description: 只有 `@cs` 的消息带。agent 坐席 / bot 机器人（内容由 AI 生成，界面要标识）/ system 系统提示；将来可能增加取值，不认识的按 system 处理
         created_at: { $ref: '#/components/schemas/DateTime' }
 
     MessagePage:

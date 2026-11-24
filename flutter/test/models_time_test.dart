@@ -28,6 +28,15 @@ void main() {
       ('u1', false, ImMessageStatus.sent),
     );
 
+    expect(inbound.senderRole, null);
+    expect(
+      ImMessage.fromServer({
+        ...msg('@cs'),
+        'sender_role': 'bot',
+      }, me: 'u1').isBot,
+      true,
+    );
+
     final outbound = ImMessage.fromServer(msg('u1'), me: 'u1', peerId: 'u2');
     expect((outbound.to, outbound.isSelf), ('u2', true));
     expect(outbound.createdAt, DateTime.utc(2026, 11, 20, 2));

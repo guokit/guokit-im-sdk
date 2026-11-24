@@ -15,7 +15,7 @@ dependencies:
     git:
       url: https://github.com/guokit/guokit-im-sdk.git
       path: flutter
-      ref: v0.5.0
+      ref: v0.6.0
 ```
 
 ## 上手
@@ -69,7 +69,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
 | `clearConversation(convId)` / `deleteConversation(convId)` | 清空本人这一侧的记录 / 删除会话（同时清空），见下方常见问题 |
 | `block / unblock / blocks` | 黑名单 |
-| `csState()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 评价一次已结束的接待，见下方常见问题 |
+| `csState()` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
 | `imageUrl(msg)` | 返回可用的图片地址；上传图链接约 24 小时过期，SDK 会在快过期时重拉 |
 
 **发送结果**（`ImMessage.status` 与 `errorCode`）：
@@ -106,9 +106,10 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 - 清空：会话留在原位，`lastMessage` 为 null、未读为 0；本设备还没发成功的消息（发送中 / 失败）仍在
 - 删除：会话从列表消失，历史一并清空，免打扰保留。之后有新消息时会话自动重新出现，只能看到新消息。客服会话在坐席回复、欢迎语、转接提示、接待超时提示、评价邀请时也会重新出现
 
-**平台客服的状态条和评价卡片怎么做？**
+**平台客服的状态条、机器人和评价卡片怎么做？**
 客服就是对方为 `@cs` 的会话（`type` 为 `service`），收发与普通单聊相同。
 - 状态条：进入客服会话、收到 `@cs` 新消息时各调一次 `csState()`，`status == ImCsStatus.queued` 时显示「前面还有 `queuePosition - 1` 位」。服务端不推送状态变化
+- 机器人：站点开了机器人时，新咨询先由机器人答，`csState()` 为 `ImCsStatus.bot`，这时可放「转人工」按钮调 `handoffCs()`（返回转完的状态）；用户发「转人工」等关键词、机器人答不了时也会自动转。机器人的消息 `msg.isBot` 为 true，内容由 AI 生成，**界面上要标识**（如「AI 生成」）。`msg.senderRole` 还有 `agent`（坐席）、`system`（系统提示），为 null 的按坐席显示
 - 评价卡片：消息满足 `type == 'custom' && content['data']['kind'] == 'imcs_rating'` 时渲染成 1–5 星卡片，提交调 `rateCs((content['data']['session_id'] as num).toInt(), rating, comment: …)`；评分越界或评语超过 200 字时 SDK 直接抛 `ArgumentError`，请在输入框限住字数。评价成功，或抛 `ImApiException`（`code == 'VALIDATION'`，即「无法评价」：已评过或接待未结束）时，都把卡片置为「已评价」
 
 **图片显示不出来？**
@@ -153,4 +154,4 @@ await im.sendCustom('@cs', {
 **已知限制**
 - 对账翻会话列表时只比较 `max_seq`。离线期间在别的设备上标了已读、又不在列表首页的老会话，要等它下次来新消息时未读数才会对齐。
 - 已删除的会话（或全新的会话）收到新消息时，SDK 会拉一次会话列表首页取对方资料（首页 = 全部置顶 + 最新的一页非置顶，刚来消息的会话必在其中）。如果这次请求失败，会先显示成昵称和头像为空、未免打扰的占位会话，下次对账时补全。
-- 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。自己实现 `ImStore` 的，升到 0.5.0 要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并照接口注释更新合并、排序、总未读规则。
+- 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。自己实现 `ImStore` 的，升到 0.5.0 及以上要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并照接口注释更新合并、排序、总未读规则；升到 0.6.0 及以上、按列存消息的要多存 `senderRole`（用 `toJson` / `fromJson` 的不用改）。

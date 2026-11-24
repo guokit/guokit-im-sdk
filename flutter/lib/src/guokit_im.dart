@@ -384,6 +384,13 @@ class GuokitIm {
     return _api.csState();
   });
 
+  /// 转人工，返回转完的状态（排队中或坐席接待中）；当前没有机器人接待时什么都不做，返回当前状态。
+  /// 需要 IM 服务端 v1.12.0 及以上，旧服务端上抛 [ImApiException]。
+  Future<ImCsState> handoffCs() => _call(() {
+    _requireLogin();
+    return _api.csHandoff();
+  });
+
   /// 评价一次已结束的接待。[sessionId] 取评价邀请消息（`custom`，`content['data']['kind'] == 'imcs_rating'`）
   /// 里的 `content['data']['session_id']`；[rating] 为 1–5、[comment] 去首尾空白后 ≤200 字，不满足抛 [ArgumentError]。
   /// 重复评价、评别人的或未结束的接待抛 [ImApiException]（`VALIDATION`「无法评价」），可把卡片置为已评价。

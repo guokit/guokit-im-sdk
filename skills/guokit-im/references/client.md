@@ -162,7 +162,9 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 ## 6. 平台客服
 
 站点装了客服模块时，`to: "@cs"` 就是给平台客服发消息，客服会话和普通单聊一样出现在会话列表里（`peer.user_id` 为 `@cs`）。
-欢迎语、排队提示、坐席回复都以 `@cs` 身份到达；接待状态 `GET /api/imcs/v1/state`，评价 `POST /api/imcs/v1/sessions/{id}/rating`（`{id}` 即评价卡片里的 `session_id`），见接入文档 §10。Flutter SDK 对应 `csState()` / `rateCs(sessionId, rating, {comment})`。
+欢迎语、排队提示、坐席回复都以 `@cs` 身份到达；接待状态 `GET /api/imcs/v1/state`，评价 `POST /api/imcs/v1/sessions/{id}/rating`（`{id}` 即评价卡片里的 `session_id`），见接入文档 §10。Flutter SDK 对应 `csState()` / `handoffCs()` / `rateCs(sessionId, rating, {comment})`。
+站点开了机器人时 `status` 多一个 `bot`，可放「转人工」按钮调 `POST /api/imcs/v1/handoff`；不认识的 `status` 按 `none` 处理。`@cs` 的消息带 `sender_role`：`agent` / `bot` / `system`，**`bot` 的内容由 AI 生成，界面要标识**（Flutter 用 `msg.isBot`）。
+网站只要客服窗口、不自己写聊天界面的，用站点自带的挂件：一行 `<script src="https://<IM 域名>/imcs-widget/loader.js" async></script>`，已登录用户传 `window.GuokitCSConfig.token`，见接入文档 §10.7。
 
 ## 7. 业务卡片
 

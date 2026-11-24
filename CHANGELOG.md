@@ -2,9 +2,18 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.6.0 — 2026-11-24
+
+智能客服：机器人接待状态、转人工、客服消息的发送者角色、回调里的用户来源。需要 IM 服务端 v1.12.0；旧服务端上除 `handoffCs` 抛 `ImApiException` 外，其余功能不受影响。
+
+- **Flutter**：`ImMessage` 加 `senderRole`（`agent` / `bot` / `system`，只有 `@cs` 的消息有）与 `isBot`——机器人的内容由 AI 生成，**界面上要标识**；`ImCsStatus` 加 `bot`；新增 `handoffCs()` 转人工。本地库 v2 → v3 自动升级，升级前已缓存的客服消息 `senderRole` 为 null
+- **注意**：用 `switch` 穷尽 `ImCsStatus` 的要补 `bot` 分支；自己实现 `ImStore` 且按列存消息的，要多存 `senderRole`（用 `toJson` / `fromJson` 的不用改）
+- **PHP**：代码不变；README 的 after_send 示例改为只给自己的用户推离线（`to_source` 为 `app`，跳过网页访客与平台客服）
+- 接入文档新增 §8.5 用户来源、§10.7 网页客服挂件；§10.2–§10.4 补 `sender_role`、机器人与转人工；OpenAPI 加 `POST /api/imcs/v1/handoff`、`POST /api/imcs/v1/visitor`；Skill、`llms-full.txt` 同步
+
 ## v0.5.0 — 2026-11-24
 
-会话置顶、免打扰、清空记录、删除会话（都只影响本人，多端同步）。需要 IM 服务端支持会话设置接口（bf-go 下一版），旧服务端上新方法抛 `ImApiException`，其余功能不受影响。
+会话置顶、免打扰、清空记录、删除会话（都只影响本人，多端同步）。需要 IM 服务端支持会话设置接口（v1.11.0），旧服务端上新方法抛 `ImApiException`，其余功能不受影响。
 
 - **Flutter**：新增 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`；`ImConversation` 加 `pinnedAt` / `pinned` / `muted` / `clearSeq`；会话快照置顶在前；总未读不计免打扰会话；处理 `conversation_changed` 推送，对账时调 `GET /conversations/changes` 补齐离线期间别的设备的改动；清空 / 删除后旧消息不再补拉、不复现。本地库 v1 → v2 自动升级
 - **不兼容**：自己实现 `ImStore`（桌面端注入）的要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并按接口注释更新会话合并、排序、总未读规则
@@ -13,7 +22,7 @@
 
 ## v0.4.1 — 2026-11-23
 
-首个接入方（大景象）实读 v0.1.0 源码时提的 4 处，PHP SDK 代码不变。
+首个接入方实读 v0.1.0 源码时提的 4 处，PHP SDK 代码不变。
 
 - **Flutter 新增 `pendingTo(peerId)`**：取发给对方的未确认消息（发送中 / 失败 / 被拒收）。会话建立前第一条就发失败时，`conversationWith` 为 null、`messages` 取不到它，聊天页现在可以用它显示并重发
 - **`imageUrl` 文档如实描述**：未确认的上传图返回上传时的临时链接（约 24 小时有效），按路径发的图优先用 `localPath`；行为不变，原注释误写成返回 null

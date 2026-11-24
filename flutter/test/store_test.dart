@@ -189,7 +189,26 @@ void main() {
     });
   });
 
-  test('sqlite 从 v1 升到 v2：旧会话保留，新列取默认值', () async {
+  test('客服消息的 senderRole 入库读回，重复写入不丢', () async {
+    for (final make in stores.values) {
+      final s = make();
+      await s.open('u1');
+      addTearDown(s.close);
+      final m = _msg(
+        id: 1,
+        seq: 1,
+        from: '@cs',
+        cid: 'b',
+      ).copyWith(senderRole: 'bot');
+      await s.upsertMessage(m);
+      await s.upsertMessage(m.copyWith(senderRole: null));
+      final got = (await s.getMessageById(1))!;
+      expect((got.senderRole, got.isBot), ('bot', true));
+      expect(ImMessage.fromJson(got.toJson()).isBot, true);
+    }
+  });
+
+  test('sqlite 从 v1 升到最新：旧会话与消息保留，新列取默认值', () async {
     final dir = Directory.systemTemp.createTempSync('guokit_im_test');
     addTearDown(() => dir.deleteSync(recursive: true));
     final db = await databaseFactoryFfi.openDatabase(
@@ -204,7 +223,11 @@ void main() {
             'last_msg_at INTEGER NOT NULL, synced_seq INTEGER NOT NULL DEFAULT 0)',
           );
           await db.execute(
-            'CREATE TABLE messages (local_id INTEGER PRIMARY KEY, conversation_id INTEGER, seq INTEGER)',
+            'CREATE TABLE messages (local_id INTEGER PRIMARY KEY AUTOINCREMENT, id INTEGER UNIQUE, '
+            'client_msg_id TEXT NOT NULL, conversation_id INTEGER, seq INTEGER, from_id TEXT NOT NULL, '
+            'to_id TEXT NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, '
+            'error_code TEXT, error_message TEXT, created_at INTEGER NOT NULL, local_path TEXT, '
+            'url_fetched_at INTEGER, UNIQUE (from_id, client_msg_id))',
           );
         },
       ),
@@ -217,6 +240,18 @@ void main() {
       'last_msg_at': 0,
       'synced_seq': 3,
     });
+    await db.insert('messages', {
+      'id': 9,
+      'client_msg_id': 'old',
+      'conversation_id': 1,
+      'seq': 5,
+      'from_id': 'u2',
+      'to_id': 'u1',
+      'type': 'text',
+      'content': '{"text":"hi"}',
+      'status': 'sent',
+      'created_at': 0,
+    });
     await db.close();
 
     final s = SqliteImStore(
@@ -228,6 +263,7 @@ void main() {
     final c = (await s.listConversations()).single;
     expect((c.maxSeq, c.pinnedAt, c.muted, c.clearSeq), (5, null, false, 0));
     expect(await s.syncedSeq(1), 3);
+    expect((await s.messages(1)).single.senderRole, null);
     await s.setChangesCursor('a');
     expect(await s.changesCursor(), 'a');
     await s.clearMessages(1, 5);
