@@ -140,7 +140,7 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 ## 3. 回调验签
 
 签名 `hex(HMAC-SHA256(回调密钥, X-Im-Timestamp + "\n" + 原始请求体))`。三件事缺一不可：**原始请求体**、**常量时间比较**、**时间戳 5 分钟窗口**。
-after_send 按 `X-Im-Delivery-Id` 去重；data 带 `to_muted`（接收方对该会话开了免打扰，为 true 时建议不推离线），`to_unread_total` 不计入免打扰会话；三种回调都带用户来源（before_send / after_send 的 `from_source`、`to_source`，user_state 的 `source`）：`app` 自己的用户、`visitor` 网页访客、`service` 平台客服，缺省按 `app`；**只给 `to_source` 为 `app` 的推离线**，访客的 user_id 不在自家用户表里；before_send 显式回 `allow: true`。
+after_send 按 `X-Im-Delivery-Id` 去重；data 带 `to_muted`（接收方对该会话开了免打扰，为 true 时建议不推离线），`to_unread_total` 不计入免打扰会话；三种回调都带用户来源（before_send / after_send 的 `from_source`、`to_source`，user_state 的 `source`）：`app` 自己的用户、`visitor` 网页访客、`wechat` 公众号 / 小程序客服的用户、`service` 平台客服，缺省按 `app`；**只给 `to_source` 为 `app` 的推离线**，访客与微信用户的 user_id 不在自家用户表里；before_send 显式回 `allow: true`。
 
 ### PHP
 

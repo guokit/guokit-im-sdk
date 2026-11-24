@@ -89,7 +89,7 @@ if ($event->name === 'before_send') {
     echo containsBannedWords($event->data) ? Callback::reject('含违规内容') : Callback::allow();
 } else {
     // after_send：先按 X-Im-Delivery-Id 落库去重，再处理
-    // 只给自己的用户推离线：to_source 为 visitor 的是网页访客（没有设备）、service 是平台客服；
+    // 只给自己的用户推离线：to_source 为 visitor 的是网页访客、wechat 是微信用户（都没有设备）、service 是平台客服；
     // 旧版服务端没有该字段，所以 @cs 仍单独排除。to_muted 为 true 表示接收方开了免打扰
     $d = $event->data;
     if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs'

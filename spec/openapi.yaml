@@ -942,7 +942,7 @@ paths:
                     properties:
                       data:
                         type: object
-                        required: [status, session_id, queue_position]
+                        required: [status, session_id, queue_position, agents_online, leave_enabled]
                         properties:
                           status:
                             type: string
@@ -956,6 +956,8 @@ paths:
                             type: integer
                             format: int64
                             description: 排队名次（含自己，排第一为 1）；非 queued 时为 0
+                          agents_online: { type: boolean, description: 是否有坐席在（在线或忙碌）；都满额时仍为 true }
+                          leave_enabled: { type: boolean, description: 站点是否开启了留言，见 POST /api/imcs/v1/leave }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/LicenseError' }
@@ -1020,14 +1022,56 @@ paths:
                     properties:
                       data:
                         type: object
-                        required: [status, session_id, queue_position]
+                        required: [status, session_id, queue_position, agents_online, leave_enabled]
                         properties:
                           status: { type: string, enum: [none, bot, queued, active] }
                           session_id: { type: integer, format: int64 }
                           queue_position: { type: integer, format: int64 }
+                          agents_online: { type: boolean }
+                          leave_enabled: { type: boolean }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/leave:
+    post:
+      tags: [客服]
+      operationId: csLeave
+      summary: 留联系方式，把排队转成留言
+      description: |
+        没有坐席在、排队中时可用：把这次排队立刻结束并转成留言（工单），内容就是用户这次说的话。已经转成留言的，只更新那张单的联系方式。
+        手机号与邮箱至少填一项。有坐席在、用户还没说过话、联系方式不合法、留言已处理完回 400 `VALIDATION`；站点没启用工单或没开启留言回 404 `VALIDATION`；同一用户每小时最多 5 次，超出回 `IM_RATE_LIMITED`（HTTP 200）。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contact_name: { type: string, maxLength: 50, description: 称呼，选填 }
+                contact_phone: { type: string, maxLength: 30, pattern: '^([0-9+\- ]{5,30})?$', description: 联系电话 }
+                contact_email: { type: string, maxLength: 120, description: 邮箱 }
+      responses:
+        '200':
+          description: 成功返回单号；业务失败见说明。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [ticket_no]
+                        properties:
+                          ticket_no: { type: string, example: T20261124123456 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/BadRequest' }
         '500': { $ref: '#/components/responses/Internal' }
 
   /api/imcs/v1/sessions/{id}/rating:
@@ -1411,7 +1455,7 @@ components:
       additionalProperties: true
       properties:
         title: { type: string, minLength: 1, maxLength: 64, description: 去首尾空白后 1–64 字 }
-        kind: { type: string, maxLength: 20, description: 推荐 order / product / service / article / page，只用于显示类型名；其他值显示为「链接」 }
+        kind: { type: string, maxLength: 20, description: 推荐 order / product / service / article / page，只用于显示类型名；其他值显示为「链接」；ticket 由站点工单进展使用 }
         subtitle: { type: string, maxLength: 100, description: ≤100 字 }
         image: { type: string, format: uri, maxLength: 1024, description: https 链接 }
         fields:
