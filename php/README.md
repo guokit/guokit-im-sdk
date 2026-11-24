@@ -9,7 +9,7 @@
 ```json
 {
   "repositories": [
-    { "type": "vcs", "url": "https://github.com/guokit/im-sdk" }
+    { "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }
   ],
   "require": {
     "guokit/im": "^0.1"

@@ -6,12 +6,12 @@
 
 ## 文档
 
-- [接入文档](https://raw.githubusercontent.com/guokit/im-sdk/main/docs/IM接入文档.md)：接入步骤、通用约定、全部接口、长连接、同步、回调、限制、客服
-- [OpenAPI 3.1 规范](https://raw.githubusercontent.com/guokit/im-sdk/main/spec/openapi.yaml)：机器可读的接口定义，可导入 Postman / Apifox 或生成代码
-- [全文（单文件）](https://raw.githubusercontent.com/guokit/im-sdk/main/llms-full.txt)：接入文档 + OpenAPI 原文拼在一起，适合一次读完
+- [接入文档](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/docs/IM接入文档.md)：接入步骤、通用约定、全部接口、长连接、同步、回调、限制、客服
+- [OpenAPI 3.1 规范](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/spec/openapi.yaml)：机器可读的接口定义，可导入 Postman / Apifox 或生成代码
+- [全文（单文件）](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/llms-full.txt)：接入文档 + OpenAPI 原文拼在一起，适合一次读完
 
 ## Agent Skill
 
-- [SKILL.md](https://raw.githubusercontent.com/guokit/im-sdk/main/skills/guokit-im/SKILL.md)：接入清单与易错点
-- [服务端参考](https://raw.githubusercontent.com/guokit/im-sdk/main/skills/guokit-im/references/server.md)：签令牌、黑名单同步、回调验签（PHP / Go / Node / Java）
-- [客户端参考](https://raw.githubusercontent.com/guokit/im-sdk/main/skills/guokit-im/references/client.md)：长连接、断线对账、去重、发送重试、图片（Dart / TypeScript）
+- [SKILL.md](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/skills/guokit-im/SKILL.md)：接入清单与易错点
+- [服务端参考](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/skills/guokit-im/references/server.md)：签令牌、黑名单同步、回调验签（PHP / Go / Node / Java）
+- [客户端参考](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/skills/guokit-im/references/client.md)：长连接、断线对账、去重、发送重试、图片（Dart / TypeScript）

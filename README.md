@@ -20,12 +20,12 @@ guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库�
 # Flutter：pubspec.yaml
 dependencies:
   guokit_im:
-    git: { url: https://github.com/guokit/im-sdk.git, path: flutter, ref: v0.5.0 }
+    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.5.0 }
 ```
 
 ```json
 // PHP：composer.json
-"repositories": [{ "type": "vcs", "url": "https://github.com/guokit/im-sdk" }],
+"repositories": [{ "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }],
 "require": { "guokit/im": "^0.5" }
 ```
 
@@ -86,7 +86,7 @@ Agent Skill 里有接入清单和十几条最容易写错的地方（令牌失�
 **Claude Code**：把 `skills/guokit-im` 目录放进项目的 `.claude/skills/`（只对本项目生效）或 `~/.claude/skills/`（全局）：
 
 ```bash
-git clone --depth 1 https://github.com/guokit/im-sdk.git /tmp/guokit-im-sdk
+git clone --depth 1 https://github.com/guokit/guokit-im-sdk.git /tmp/guokit-im-sdk
 mkdir -p .claude/skills && cp -R /tmp/guokit-im-sdk/skills/guokit-im .claude/skills/
 ```
 
@@ -97,7 +97,7 @@ mkdir -p .claude/skills && cp -R /tmp/guokit-im-sdk/skills/guokit-im .claude/ski
 **Cursor 及其他工具**：把下面的链接交给 AI（Cursor 可在 Docs 设置里添加为文档源），或把 `SKILL.md` 内容放进项目规则文件：
 
 ```
-https://raw.githubusercontent.com/guokit/im-sdk/main/llms-full.txt
+https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/llms-full.txt
 ```
 
 ## 许可证

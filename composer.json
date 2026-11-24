@@ -4,7 +4,7 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["im", "chat", "guokit", "sdk"],
-    "homepage": "https://github.com/guokit/im-sdk",
+    "homepage": "https://github.com/guokit/guokit-im-sdk",
     "require": {
         "php": ">=8.0",
         "ext-json": "*",

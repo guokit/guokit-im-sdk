@@ -1,6 +1,6 @@
 ---
 name: guokit-im
-description: 接入 guokit IM（果壳软件即时通讯）时使用：写接入方后端的用户导入、签令牌、封禁、黑名单同步、代发消息、回调验签代码，或写 App / Web 客户端的长连接、断线对账、消息去重、发送重试、图片收发、未读与已读代码。用户提到 guokit IM、im-sdk、/api/im/v1、X-Api-Key 为 imk_ 开头、Centrifuge 收 IM 推送、IM 回调 X-Im-Signature 时触发。
+description: 接入 guokit IM（果壳软件即时通讯）时使用：写接入方后端的用户导入、签令牌、封禁、黑名单同步、代发消息、回调验签代码，或写 App / Web 客户端的长连接、断线对账、消息去重、发送重试、图片收发、未读与已读代码。用户提到 guokit IM、guokit-im-sdk、/api/im/v1、X-Api-Key 为 imk_ 开头、Centrifuge 收 IM 推送、IM 回调 X-Im-Signature 时触发。
 ---
 
 # guokit IM 接入

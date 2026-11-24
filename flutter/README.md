@@ -13,7 +13,7 @@ guokit IM 的 Flutter 客户端：替你处理令牌续期、断线对账补拉�
 dependencies:
   guokit_im:
     git:
-      url: https://github.com/guokit/im-sdk.git
+      url: https://github.com/guokit/guokit-im-sdk.git
       path: flutter
       ref: v0.5.0
 ```
