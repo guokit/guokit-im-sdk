@@ -21,13 +21,20 @@ HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <
 
 1. 翻会话列表 `GET /conversations?cursor=`：比对每个会话的 `max_seq` 与本地最大 seq，一整页都已追平即可停。
 2. 落后的会话按 `after_seq=<本地最大 seq>` 补拉，`has_more` 为真就用最后一条的 seq 继续。
-3. 用列表里的 `unread` / `read_seq` 刷新角标，或 `GET /unread` 取 `total`。
+3. 用列表里的 `unread` / `read_seq` 刷新角标，或 `GET /unread` 取 `total`（不计免打扰会话）。
+4. 带上次保存的 `next_cursor` 调 `GET /conversations/changes?cursor=`，逐项按下面 `conversation_changed` 的规则应用；
+   `has_more` 为真就接着翻，每页都保存 `next_cursor`（为空不存）。离线期间别的设备删掉的会话只能从这里知道。
+
+`seq <= clear_seq` 的消息本人看不到、服务端也不再返回：会话的 `clear_seq` 变大时删掉本地这些消息，
+补拉起点取 `max(本地最大 seq, clear_seq)`，晚到的旧消息直接丢弃。
 
 推送事件：
 
 - `message`：`seq > 本地最大 seq + 1` → 先补拉中间段；再按消息 `id` upsert（自己发的也会推回来）。
 - `read`：把该会话 `read_seq` 设为事件值（只进不退）。
 - `read_all`：所有会话未读清零（或重拉会话列表）。
+- `conversation_changed`：用 `conversation` 覆盖本地设置，不必看 `action`。按 `clear_seq` 删本地旧消息；
+  `visible` 为 false 时把会话和它的全部消息一起删掉（本地已有 `seq > clear_seq` 的消息说明结果晚到，只清不删）。
 
 ## 3. 发送
 
@@ -80,6 +87,8 @@ Future<centrifuge.Client> connectIm(String token) async {
         store.setReadSeq(ev['conversation_id'] as int, ev['read_seq'] as int);
       case 'read_all':
         store.clearAllUnread();
+      case 'conversation_changed':
+        store.applyConvSettings(ev['conversation']);   // 规则见 §2
     }
   });
 
@@ -120,7 +129,7 @@ export function connectIm(token: string) {
     }
   });
   c.on('publication', async (ctx) => {          // 服务端订阅推送
-    const ev = ctx.data as { event: string; conversation_id?: number; seq?: number; read_seq?: number; message?: unknown };
+    const ev = ctx.data as { event: string; conversation_id?: number; seq?: number; read_seq?: number; message?: unknown; conversation?: unknown };
     if (ev.event === 'message') {
       const local = store.maxSeq(ev.conversation_id!);
       if (ev.seq! > local + 1) await pullAfter(ev.conversation_id!, local);
@@ -129,6 +138,8 @@ export function connectIm(token: string) {
       store.setReadSeq(ev.conversation_id!, ev.read_seq!);
     } else if (ev.event === 'read_all') {
       store.clearAllUnread();
+    } else if (ev.event === 'conversation_changed') {
+      store.applyConvSettings(ev.conversation);  // 规则见 §2
     }
   });
   c.connect();
