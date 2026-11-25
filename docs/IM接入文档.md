@@ -1191,7 +1191,7 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 |---|---|---|---|
 | PUT | `/services/{sid}` | `{"name", "avatar_url"?, "settings"?}` | 建或改。没传 `settings` 不改设置，传了整个替换；不改启停 |
 | PATCH | `/services/{sid}` | `{"status": 0\|1}` | 停用：用户发不进来，未结束的接待结束，坐席令牌失效并断开 |
-| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "max_concurrent"?}` | 建或改坐席；移除过的重新启用 |
+| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "max_concurrent"?}` | 建或改坐席；移除过的重新启用。新坐席默认在线（要打开工作台连上了才分得到接待），之后以他自己设的为准 |
 | DELETE | `/services/{sid}/agents/{external_id}` | 无 | 移除：令牌失效、断开，接待中的转回排队。历史接待里仍显示这名坐席 |
 | POST | `/services/{sid}/agents/{external_id}/token` | 无 | 签坐席令牌，返回 `{"token", "expires_at"}` |
 | GET | `/services/{sid}/summary` | — | 资料、设置、坐席数 `agents`、在线坐席 `agents_online`、排队 `queue_count` |
@@ -1224,9 +1224,9 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 </script>
 ```
 
-`desk.setToken(token)` 换员工（传空串退出），`desk.destroy()` 移除。令牌有效 2 小时，页面自动续期；从签发起最长 12 小时，到时回调 `onTokenExpired`。**你方后端签令牌前必须自己确认该员工此刻有权限**，令牌泄露等于对方能以这名员工的身份接待。
+`desk.setToken(token)` 换员工（传空串退出），`desk.destroy()` 移除。工作台藏起来时（如切到你后台的其他菜单）调 `desk.setVisible(false)`，显示时 `desk.setVisible(true)`：藏起期间的新消息都算未读、都会回调 `onRemind`，不调的话正开着的那条会被当成已看。令牌有效 2 小时，页面自动续期；从签发起最长 12 小时，到时回调 `onTokenExpired`。**你方后端签令牌前必须自己确认该员工此刻有权限**，令牌泄露等于对方能以这名员工的身份接待。
 
-**在 App 里接待**（页面适配手机宽度）：用 WebView 打开 `https://im.example.com/imcs-desk#token=<坐席令牌>`，令牌放在 `#` 后面，不会发到服务器日志。页面给 App 的消息走名为 `GuokitDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `guokitdesk:ready` / `guokitdesk:token-expired` / `guokitdesk:unread`（带 `count`）/ `guokitdesk:remind`（带 `title`、`body`）；App 换令牌执行 `window.GuokitDesk.setToken("…")`。发图片、文件要在 WebView 里放开文件选择。
+**在 App 里接待**（页面适配手机宽度）：用 WebView 打开 `https://im.example.com/imcs-desk#token=<坐席令牌>`，令牌放在 `#` 后面，不会发到服务器日志。页面给 App 的消息走名为 `GuokitDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `guokitdesk:ready` / `guokitdesk:token-expired` / `guokitdesk:unread`（带 `count`）/ `guokitdesk:remind`（带 `title`、`body`）；App 换令牌执行 `window.GuokitDesk.setToken("…")`，收到 `guokitdesk:ready`（含页面重新加载）也要给一次。App 切到别的页面、WebView 还留着时，执行 `window.GuokitDesk.setVisible(false)`，回来再传 `true`；页面重新加载后回到「显示」。发图片、文件要在 WebView 里放开文件选择。
 
 #### 员工不在线时的提醒
 
