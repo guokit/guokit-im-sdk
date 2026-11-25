@@ -2,7 +2,7 @@
 
 三个 SDK（Flutter `guokit_im`、PHP `guokit/im`、JS `@guokit/im`）共用仓库版本号。
 
-## v0.12.0
+## v0.12.0 — 2026-11-25
 
 新增 JS 客户端 SDK。需要 IM 服务端 v1.17.0（文件与视频 v1.19.0，客服主体 v1.20.0），服务端不用改。
 

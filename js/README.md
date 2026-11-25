@@ -5,8 +5,9 @@ guokit IM 的客户端 SDK，一套代码用在浏览器、uni-app（微信小�
 | 平台 | 写法 | 状态 |
 |---|---|---|
 | 浏览器 | 不传 `platform` | 已验证（Chromium） |
-| uni-app 微信小程序、H5 | `platform: uniPlatform(uni)` | 已验证 |
-| 微信原生小程序 | `platform: uniPlatform(wx)` | 已验证 |
+| 微信原生小程序 | `platform: uniPlatform(wx)` | 已验证（iOS 真机、开发者工具；安卓真机未验） |
+| uni-app 微信小程序 | `platform: uniPlatform(uni)` | 已验证（开发者工具） |
+| uni-app H5 | `platform: uniPlatform(uni)` | 已验证（正式构建，Chromium） |
 | uni-app App（iOS / Android）、抖音等小程序 | `platform: uniPlatform(uni)` | 未验证 |
 | 支付宝、快手、京东小程序 | — | 不支持：请求接口没有 PUT / DELETE |
 
@@ -108,7 +109,7 @@ await im.sendVideo(to, file, { durationMs, width, height, cover })        // H.2
 
 | 现象 | 多半是 |
 |---|---|
-| 一直 `connecting` | 域名没加白：浏览器看 Origin 白名单，小程序看 socket 合法域名；或反代没配 WebSocket |
+| 一直 `connecting` | 域名没加白：浏览器看 Origin 白名单，小程序看 socket 合法域名；或反代没配 WebSocket。微信小程序握手会带 `Origin`，iOS 真机与开发者工具上是 IM 自己的来源、不用加白名单 |
 | `disconnected` 且控制台有「取令牌或连接失败」 | `tokenProvider` 失败、20 秒没返回，或 `expires_at` 格式不对。恢复网络、回前台时会自动再试 |
 | 连上又断、反复换令牌 | 签令牌的站点与 `baseUrl` 不是同一个，或用户被踢下线 |
 | `NETWORK` 但网络正常 | 跨域没加白；没装客服的站点跨域调 `csState` 也是它，不要自动循环重试 |
