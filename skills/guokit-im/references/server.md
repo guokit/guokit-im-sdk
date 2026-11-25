@@ -125,16 +125,17 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 | 封号 / 解封 | `PATCH /users/{user_id}` `{"status":0}` / `{"status":1}`；封号让全部令牌立即失效并断开连接，解封后要重新签令牌 |
 | 退出全部设备 | `POST /users/{user_id}/kick` |
 | 自家拉黑后同步 | `PUT /users/{user_id}/blocks/{target}`；解除 `DELETE` 同路径；幂等，失败可直接重试 |
-| 查会话设置 | `GET /users/{user_id}/conversations/{peer_id}`，对方为 `@cs` 即客服会话；查不到 404 + `VALIDATION`；返回 `{conversation_id, peer_user_id, pinned, pinned_at, muted, clear_seq, unread, visible}` |
+| 查会话设置 | `GET /users/{user_id}/conversations/{peer_id}`，对方为 `@cs` 或 `@cs:<主体标识>` 即客服会话；查不到 404 + `VALIDATION`；返回 `{conversation_id, peer_user_id, pinned, pinned_at, muted, clear_seq, unread, visible}` |
 | 置顶 / 免打扰 | `PUT /users/{user_id}/conversations/{peer_id}/settings` `{"pinned"?:bool,"muted"?:bool}`，至少一个 |
 | 清空聊天记录 | `POST /users/{user_id}/conversations/{peer_id}/clear`，只清该用户这一侧 |
 | 删除会话 | `DELETE /users/{user_id}/conversations/{peer_id}`：清空 + 移出列表 + 取消置顶，免打扰保留 |
-| 以某用户身份发消息 | `POST /messages`，请求体同客户端发消息再加 `from`；from / to 不能是 `@cs` |
+| 以某用户身份发消息 | `POST /messages`，请求体同客户端发消息再加 `from`；from / to 不能是客服 |
 | 审计查历史 | `GET /conversations/{id}/messages` |
 | 查用户是否在线 | `POST /users/online` `{"user_ids":[…]}`，每次 1–100 个，返回 `items[{user_id, online}]`；在线 = 此刻至少一条长连接，这是权威来源 |
-| 撤回违规消息 | `POST /messages/{id}/recall`，不限时，返回撤回后的消息对象；渠道用户的会话、`@cs` 发的消息按不存在（404 `VALIDATION`）。撤回后异步收 `message_recalled` 回调 `{message_id, conversation_id, seq, from, to, by, recalled_at, from_source, to_source}`（不带原文），可能比 after_send 先到，按 `message_id` 判断 |
+| 撤回违规消息 | `POST /messages/{id}/recall`，不限时，返回撤回后的消息对象；渠道用户的会话、客服发的消息按不存在（404 `VALIDATION`）。撤回后异步收 `message_recalled` 回调 `{message_id, conversation_id, seq, from, to, by, recalled_at, from_source, to_source}`（不带原文），可能比 after_send 先到，按 `message_id` 判断 |
 | 收上下线通知 | IM 设置打开「推送用户上下线」后收 `user_state` 回调 `{user_id, online, at, ts}`；下线在断开 30 秒后才推；按 `ts` 保留最新，重启不补发下线，以查询为准 |
 | 识别微信用户是哪个会员 | IM 设置打开「识别微信用户」后收同步回调 `resolve_user` `{channel, account_type, appid, openid, unionid}`，3 秒内回 `{"code":0,"data":{"user_id":"u1001"}}`；不认识回空串。只返回**已确认绑定且已导入**的会员，不要按昵称、手机号猜；查询出错回非 0 的 `code`，别回空串（空串会清掉已有关联） |
+| 每家门店 / 商户一个客服 | `PUT /api/imcs/v1/server/services/{sid}` `{"name"}` 建主体，`PUT …/services/{sid}/agents/{external_id}` `{"nickname"}` 加员工，首次用 `POST …/services/batch` 批量导入；用户给 `@cs:<sid>` 发消息。员工打开工作台前 `POST …/agents/{external_id}/token` 签坐席令牌（**先自己确认他有权限**），页面嵌 `/imcs-widget/desk-loader.js`，App 里 WebView 打开 `/imcs-desk#token=…`。员工不在线靠 after_send 的 `service_id`、`agents_online`、`agent_external_id`、`agent_online` 推手机。见接入文档 §10.11（服务端 ≥ v1.20.0） |
 | 代发订单 / 商品卡片 | `POST /messages`，`type: custom`，在 `content.data.im_card` 里带标准卡片外壳（title 必填；fields 放订单号、状态等发送时快照；web_link / app_link / mp_path 分别给网页、App、小程序），客服工作台按它画卡片，见接入文档 §5.9 |
 
 黑名单以接入方为准时：在自家拉黑事务提交后调 IM；IM 调用失败就记一条待重试任务，不要回滚自家拉黑。
@@ -142,7 +143,7 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 ## 3. 回调验签
 
 签名 `hex(HMAC-SHA256(回调密钥, X-Im-Timestamp + "\n" + 原始请求体))`。三件事缺一不可：**原始请求体**、**常量时间比较**、**时间戳 5 分钟窗口**。
-after_send 按 `X-Im-Delivery-Id` 去重；data 带 `to_muted`（接收方对该会话开了免打扰，为 true 时建议不推离线），`to_unread_total` 不计入免打扰会话；三种回调都带用户来源（before_send / after_send 的 `from_source`、`to_source`，user_state 的 `source`）：`app` 自己的用户、`visitor` 网页访客、`wechat` 公众号 / 小程序客服的用户、`service` 平台客服，缺省按 `app`；**只给 `to_source` 为 `app` 的推离线**，访客与微信用户的 user_id 不在自家用户表里；before_send 显式回 `allow: true`。
+after_send 按 `X-Im-Delivery-Id` 去重；data 带 `to_muted`（接收方对该会话开了免打扰，为 true 时建议不推离线），`to_unread_total` 不计入免打扰会话；三种回调都带用户来源（before_send / after_send 的 `from_source`、`to_source`，user_state 的 `source`）：`app` 自己的用户、`visitor` 网页访客、`wechat` 公众号 / 小程序客服的用户、`service` 客服，缺省按 `app`；**只给 `to_source` 为 `app` 的推离线**，访客与微信用户的 user_id 不在自家用户表里；before_send 显式回 `allow: true`。
 
 ### PHP
 

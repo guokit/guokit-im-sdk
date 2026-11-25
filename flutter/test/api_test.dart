@@ -76,6 +76,33 @@ void main() {
     );
   });
 
+  test('客服主体：客服号换算；接待状态带 service_id，默认不带', () async {
+    expect(csUserId(), '@cs');
+    expect(csUserId('shop_1'), '@cs:shop_1');
+    expect(csServiceId('@cs'), '');
+    expect(csServiceId('@cs:shop_1'), 'shop_1');
+    expect(csServiceId('u1'), isNull);
+    final seen = <String>[];
+    final api = ImApi(
+      baseUrl: 'https://im.example.com',
+      tokens: TokenManager(() async => ImToken('t', _week)),
+      client: MockClient((req) async {
+        seen.add(req.url.toString());
+        return _res({
+          'code': 0,
+          'message': 'ok',
+          'data': {'status': 'active', 'session_id': 1, 'queue_position': 0},
+        });
+      }),
+    );
+    await api.csState();
+    await api.csState(serviceId: 'shop_1');
+    expect(seen, [
+      'https://im.example.com/api/imcs/v1/state',
+      'https://im.example.com/api/imcs/v1/state?service_id=shop_1',
+    ]);
+  });
+
   test('转人工走 /api/imcs/v1/handoff；不认识的状态按 none', () async {
     var status = 'bot';
     final seen = <String>[];

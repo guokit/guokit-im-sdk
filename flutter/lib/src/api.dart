@@ -313,9 +313,19 @@ class ImApi {
     );
   }
 
-  /// `GET /api/imcs/v1/state`：当前客服接待状态。
-  Future<ImCsState> csState() async => ImCsState.fromServer(
-    _asMap(await _json('GET', '/state', prefix: _csPrefix)),
+  /// `GET /api/imcs/v1/state`：当前客服接待状态，[serviceId] 不传是平台客服。
+  Future<ImCsState> csState({String? serviceId}) async => ImCsState.fromServer(
+    _asMap(
+      await _json(
+        'GET',
+        '/state',
+        prefix: _csPrefix,
+        query: {
+          if (serviceId != null && serviceId.isNotEmpty)
+            'service_id': serviceId,
+        },
+      ),
+    ),
   );
 
   /// `POST /api/imcs/v1/handoff`：转人工，返回转完的接待状态；没有机器人接待时返回当前状态。

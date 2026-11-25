@@ -49,13 +49,18 @@ try {
 | `kick($userId)` | 踢下线，旧令牌全部作废 |
 | `block($userId, $target)` / `unblock($userId, $target)` | 拉黑 / 解除（`$userId` 拒收 `$target` 的消息） |
 | `blocks($userId, $offset = 0, $limit = 50)` | 黑名单列表，返回 `items` 与 `has_more` |
-| `conversationSettings($userId, $peerId)` | 按「用户 + 对方」查会话设置（对方 `@cs` 即客服会话）；查不到抛 `VALIDATION`（HTTP 404） |
+| `conversationSettings($userId, $peerId)` | 按「用户 + 对方」查会话设置（对方 `@cs` 或 `@cs:<主体标识>` 即客服会话）；查不到抛 `VALIDATION`（HTTP 404） |
 | `setConversationSettings($userId, $peerId, array $settings)` | 置顶 / 免打扰：`['pinned'=>bool, 'muted'=>bool]`，至少一个 |
 | `clearConversation($userId, $peerId)` | 清空该用户这一侧的聊天记录 |
 | `deleteConversation($userId, $peerId)` | 删除会话（清空 + 移出列表 + 取消置顶，免打扰保留） |
 | `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式，语音、文件、视频不能代发（要发单据用业务卡片的 `web_link`） |
 | `recallMessage(int $messageId)` | 撤回消息，不限时，返回撤回后的消息对象（`type` 为 `recalled`）；不存在抛 `VALIDATION`（HTTP 404）。需服务端 ≥ v1.17.0 |
 | `history($conversationId, $afterSeq = null, $beforeSeq = null, $limit = 30)` | 查会话历史（审计） |
+| `upsertService($serviceId, $name, $avatarUrl = '', ?array $settings = null)` | 建或改客服主体（每家门店一个客服这类场景），返回 `service_id` 与 `user_id`（`@cs:<主体标识>`）。需服务端 ≥ v1.20.0，下同 |
+| `setServiceStatus($serviceId, int $status)` / `serviceSummary($serviceId)` | 启停主体 / 资料、坐席数与排队数 |
+| `upsertServiceAgent($serviceId, $externalId, $nickname, $avatarUrl = '', ?int $maxConcurrent = null)` / `removeServiceAgent($serviceId, $externalId)` | 建或改 / 移除主体的坐席（你方员工） |
+| `issueAgentToken($serviceId, $externalId)` | 签坐席令牌，交给嵌入的工作台页面，返回 `token` 与 `expires_at`。**签之前请自己确认该员工有权限** |
+| `importServices(array $services)` | 批量导入主体与坐席，最多 100 个主体、合计 500 个坐席 |
 | `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |
 
 `user_id`、`target` 进路径前已自动 `rawurlencode`。`ImException` 的 `getErrorCode()` 在非业务错误时取值：`NETWORK`（网络异常）、`INTERNAL`（响应不是合法 JSON）、`CALLBACK_INVALID`（回调验签失败）。
@@ -96,9 +101,9 @@ if ($event->name === 'before_send') {
 } else {
     // after_send：先按 X-Im-Delivery-Id 落库去重，再处理
     // 只给自己的用户推离线：to_source 为 visitor 的是网页访客、wechat 是微信用户（都没有设备）、service 是平台客服；
-    // 旧版服务端没有该字段，所以 @cs 仍单独排除。to_muted 为 true 表示接收方开了免打扰
+    // 旧版服务端没有该字段，所以客服（@cs、@cs:<主体标识>）仍单独排除。to_muted 为 true 表示接收方开了免打扰
     $d = $event->data;
-    if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs'
+    if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs')
         && ($d['to_online'] ?? null) === false && !($d['to_muted'] ?? false)) {
         // pushOffline(...)；$d['message']['sender_role'] === 'bot' 的内容由 AI 生成
     }

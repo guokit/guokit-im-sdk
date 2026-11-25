@@ -77,7 +77,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
 | `clearConversation(convId)` / `deleteConversation(convId)` | 清空本人这一侧的记录 / 删除会话（同时清空），见下方常见问题 |
 | `block / unblock / blocks` | 黑名单 |
-| `csState()` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
+| `csState({serviceId})` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
 | `leaveCs({name, phone, email})` | 没有客服在线时留联系方式，返回留言单号，见下方常见问题 |
 | `imageUrl(msg)` / `voiceUrl(msg)` / `fileUrl(msg)` / `videoUrl(msg)` / `videoCoverUrl(msg)` | 返回可用的图片 / 语音 / 文件下载 / 视频 / 视频封面地址；上传的链接约 24 小时过期，SDK 会在快过期时重拉 |
 
@@ -117,6 +117,7 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 
 **平台客服的状态条、机器人、留言和评价卡片怎么做？**
 客服就是对方为 `@cs` 的会话（`type` 为 `service`），收发与普通单聊相同。
+- 门店 / 商户各有客服的（需服务端 v1.20.0）：给 `csUserId('主体标识')` 发消息，会话同样是 `type == 'service'`，`conversation.serviceId` 取主体标识，状态用 `csState(serviceId: …)`；没有机器人、转人工与留言。**判断客服会话请用 `type` 或 `serviceId != null`，不要写死 `== '@cs'`**
 - 状态条：进入客服会话、收到 `@cs` 新消息时各调一次 `csState()`，`status == ImCsStatus.queued` 时显示「前面还有 `queuePosition - 1` 位」。服务端不推送状态变化
 - 机器人：站点开了机器人时，新咨询先由机器人答，`csState()` 为 `ImCsStatus.bot`，这时可放「转人工」按钮调 `handoffCs()`（返回转完的状态）；用户发「转人工」等关键词、机器人答不了时也会自动转。机器人的消息 `msg.isBot` 为 true，内容由 AI 生成，**界面上要标识**（如「AI 生成」）。`msg.senderRole` 还有 `agent`（坐席）、`system`（系统提示），为 null 的按坐席显示
 - 留言（需服务端 v1.13.0）：`csState().canLeave` 为 true（排队中、没有客服在、站点开了留言）时给一个「留联系方式」的表单，提交调 `leaveCs(name: …, phone: …, email: …)`，电话与邮箱至少一项；留言内容不用填，就是用户这次在会话里说的话。返回单号，同时会收到一条带单号的系统消息，这次排队结束，请再调一次 `csState()`。本地能判断的格式问题抛 `ArgumentError`；抛 `ImApiException` 时，`VALIDATION`、`IM_RATE_LIMITED` 直接显示 `message`，其余（断网、旧服务端等）提示稍后再试；`IM_RATE_LIMITED` 是每小时 5 次，**不要自动重试**。只想提示「客服都不在」的看 `agentsOnline`

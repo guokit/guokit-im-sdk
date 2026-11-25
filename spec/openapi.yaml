@@ -6,7 +6,7 @@ info:
     IM 服务的 HTTP 接口规范，与《IM 接入文档》配套，字段与错误码以服务端实现为准。
 
     - 服务端接口（`/api/im/v1/server/*`）由接入方**后端**调用，鉴权用请求头 `X-Api-Key`。
-    - 客户端接口（`/api/im/v1/*`）与客服接口（`/api/imcs/v1/*`）由 App / Web 调用，鉴权用 `Authorization: Bearer <用户令牌>`。
+    - 客户端接口（`/api/im/v1/*`）与客服接口（`/api/imcs/v1/*`，其中 `/api/imcs/v1/server/*` 由接入方后端调）由 App / Web 调用，鉴权用 `Authorization: Bearer <用户令牌>`。
     - 响应包统一为 `{"code", "message", "data"}`：**成功时 `code` 是整数 `0`；失败时 `code` 是字符串错误码**，`data` 为 `{}`。
       部分业务失败（如 `IM_USER_NOT_FOUND`、`IM_BLOCKED`、`IM_RATE_LIMITED`）走 **HTTP 200 + 业务码**，判断成功请严格比较 `code === 0`。
     - 时间均为 `YYYY-MM-DD HH:mm:ss` 字符串，时区固定 Asia/Shanghai（UTC+8）。各种 id、seq 均为整数，user_id 为字符串。
@@ -25,6 +25,8 @@ tags:
     description: App / Web 调用，用户令牌鉴权。令牌失效统一回 401 `IM_TOKEN_INVALID`。
   - name: 客服
     description: 站点装了客服模块时可用，用户令牌鉴权，路径前缀是 `/api/imcs/v1`。
+  - name: 客服主体
+    description: 一个站点里分出多个独立接待的客服（如每家门店一个）。站点装了客服模块时可用，接入方后端调用，`X-Api-Key` 鉴权，频率与服务端接口合计。
 
 paths:
   # ---------------- 服务端接口 ----------------
@@ -323,7 +325,7 @@ paths:
       summary: 拉黑
       description: |
         `{user_id}` 拉黑 `{target}`：此后 target 发给 user_id 的消息回 `IM_BLOCKED`；user_id 发给 target 不受影响。
-        双方只校验格式、不要求已导入；不能拉黑自己、不能拉黑 `@cs`（均为 400 `VALIDATION`）。
+        双方只校验格式、不要求已导入；不能拉黑自己、不能拉黑客服（均为 400 `VALIDATION`）。
         幂等：重复拉黑不报错、不改拉黑时间。不推送事件、不触发回调。
       security: [{ ApiKey: [] }]
       responses:
@@ -354,7 +356,7 @@ paths:
       operationId: serverGetConversationSettings
       summary: 查询用户对某会话的设置
       description: |
-        按「用户 + 对方」定位会话（`{peer_id}` 为对方 user_id，客服会话写 `@cs`）。
+        按「用户 + 对方」定位会话（`{peer_id}` 为对方 user_id，客服会话写 `@cs` 或 `@cs:<主体标识>`）。
         会话要双方有过消息才存在；查不到会话回 404 `VALIDATION`（所以不能提前给没聊过的人设免打扰）。
       security: [{ ApiKey: [] }]
       responses:
@@ -430,7 +432,7 @@ paths:
       summary: 以某用户身份代发消息
       description: |
         与客户端发消息走完全相同的流程（校验、幂等、黑名单、限速按 `from` 计、发送前回调、推送、发送后回调）。
-        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式，语音、文件、视频不能代发。`from` 或 `to` 为 `@cs` 时一律回 `IM_USER_NOT_FOUND`。
+        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式，语音、文件、视频不能代发。`from` 或 `to` 为客服时一律回 `IM_USER_NOT_FOUND`。
       security: [{ ApiKey: [] }]
       requestBody:
         required: true
@@ -441,7 +443,7 @@ paths:
         '200':
           description: |
             成功返回消息对象（幂等重放时返回第一次的那条）。业务失败（HTTP 200）：
-            `IM_USER_NOT_FOUND`（收发方不存在，或涉及 `@cs`）、`IM_USER_DISABLED`、`IM_BLOCKED`（收件人已拉黑 from）、
+            `IM_USER_NOT_FOUND`（收发方不存在，或涉及客服）、`IM_USER_DISABLED`、`IM_BLOCKED`（收件人已拉黑 from）、
             `IM_RATE_LIMITED`（接入应用或发送者超频）、`IM_MESSAGE_REJECTED`（被发送前回调拒绝）。
           content:
             application/json:
@@ -466,7 +468,7 @@ paths:
       operationId: serverRecallMessage
       summary: 撤回消息
       description: |
-        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、`@cs` 发的消息一律按不存在（404）。
+        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、客服发的消息一律按不存在（404）。
         已撤回的再调返回同一结果，不再推送、不再回调。
       security: [{ ApiKey: [] }]
       responses:
@@ -552,7 +554,7 @@ paths:
       operationId: sendMessage
       summary: 发消息
       description: |
-        `from` 取令牌里的用户。`to` 填 `@cs` 即发给平台客服（站点装了客服模块时）。
+        `from` 取令牌里的用户。`to` 填 `@cs` 即发给平台客服，填 `@cs:<主体标识>` 发给那个客服主体（站点装了客服模块时）。
         同一发送者的 `client_msg_id` 全局唯一，重复提交直接返回第一次的那条消息（不再推送、不再回调）。
       security: [{ UserToken: [] }]
       requestBody:
@@ -1062,7 +1064,7 @@ paths:
       tags: [客户端]
       operationId: addBlock
       summary: 拉黑
-      description: 令牌用户拉黑 `{target}`，语义同服务端拉黑。`target` 不合法、是自己或是 `@cs` 回 400 `VALIDATION`。幂等。
+      description: 令牌用户拉黑 `{target}`，语义同服务端拉黑。`target` 不合法、是自己或是客服回 400 `VALIDATION`。幂等。
       security: [{ UserToken: [] }]
       responses:
         '200': { $ref: '#/components/responses/OkEmpty' }
@@ -1091,6 +1093,12 @@ paths:
       summary: 当前接待状态
       description: 用于客服会话页顶部的状态条。服务端不推送状态变化，进入客服会话、收到 `@cs` 新消息时刷新即可。站点客服不可用时回 400 `VALIDATION`。
       security: [{ UserToken: [] }]
+      parameters:
+        - name: service_id
+          in: query
+          required: false
+          description: 客服主体标识，缺省是平台客服
+          schema: { type: string, pattern: '^[a-z0-9_-]{1,40}$' }
       responses:
         '200':
           description: 成功返回接待状态。
@@ -1131,7 +1139,7 @@ paths:
       summary: 网页访客换令牌
       description: |
         网页客服挂件用，不需要令牌，不支持跨域调用。带上次返回的 `visitor_key` 认回同一访客；没带或无效则新建一个访客（按 IP 与全站限额）。
-        返回的 `token` 是普通用户令牌，只能与 `@cs` 往来。站点没开放网页客服回 404 `VALIDATION`；超过限额回 `IM_RATE_LIMITED`；访客已被封禁回 `IM_USER_DISABLED`（后两者 HTTP 200）。
+        返回的 `token` 是普通用户令牌，只能与客服往来。站点没开放网页客服回 404 `VALIDATION`；超过限额回 `IM_RATE_LIMITED`；访客已被封禁回 `IM_USER_DISABLED`（后两者 HTTP 200）。
       security: []
       requestBody:
         required: false
@@ -1280,6 +1288,266 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  # ---------------- 客服主体：接入方后端 ----------------
+  /api/imcs/v1/server/services/batch:
+    post:
+      tags: [客服主体]
+      operationId: csBatchServices
+      summary: 批量导入主体与坐席
+      description: |
+        首次接入用，逐个调会撞调用频率上限。每批最多 100 个主体、合计 500 个坐席。
+        按顺序处理，遇到错误即停并指出第几个；重复提交没有副作用，可整批重试。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceBatch' }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [services, agents]
+                            properties:
+                              services: { type: integer }
+                              agents: { type: integer }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}:
+    put:
+      tags: [客服主体]
+      operationId: csPutService
+      summary: 建或改主体
+      description: |
+        不存在则新建（启用状态），存在则改名称、头像与设置；不改启停。没传 `settings` 时不改设置，传了就整个替换。
+        用户给返回的 `user_id` 发消息，就是在找这个主体的客服。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceInput' }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [service_id, user_id]
+                            properties:
+                              service_id: { type: string }
+                              user_id: { type: string, example: '@cs:shop_1001' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [客服主体]
+      operationId: csPatchService
+      summary: 启用或停用主体
+      description: |
+        停用后用户发不进来，未结束的接待静默结束，坐席令牌失效并断开。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [status], properties: { status: { type: integer, enum: [0, 1], description: 1 启用，0 停用 } } }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [service_id, status]
+                            properties:
+                              service_id: { type: string }
+                              status: { type: integer, enum: [0, 1] }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/summary:
+    get:
+      tags: [客服主体]
+      operationId: csServiceSummary
+      summary: 主体资料与此刻的接待情况
+      description: |
+        主体不存在回 400 `VALIDATION`。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [service_id, user_id, name, avatar_url, status, settings, agents, agents_online, queue_count]
+                            properties:
+                              service_id: { type: string }
+                              user_id: { type: string }
+                              name: { type: string }
+                              avatar_url: { type: string }
+                              status: { type: integer, enum: [0, 1] }
+                              settings: { $ref: '#/components/schemas/ServiceSettings' }
+                              agents: { type: integer, description: 坐席数 }
+                              agents_online: { type: integer, description: 在线且能接待的坐席数 }
+                              queue_count: { type: integer, format: int64, description: 排队中的接待数 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/agents/{external_id}:
+    put:
+      tags: [客服主体]
+      operationId: csPutAgent
+      summary: 建或改坐席
+      description: |
+        坐席是你方的员工，不需要在客服后台建账号。已移除的再次调用会重新启用。主体须已存在。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+        - $ref: '#/components/parameters/ExternalIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceAgentInput' }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [service_id, external_id, agent_id]
+                            properties:
+                              service_id: { type: string }
+                              external_id: { type: string }
+                              agent_id: { type: integer, format: int64, description: 坐席 ID，与消息里的 agent_id 同一个 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [客服主体]
+      operationId: csDeleteAgent
+      summary: 移除坐席
+      description: |
+        令牌失效、断开连接，接待中的转回排队重新分配。历史接待里仍显示这名坐席。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+        - $ref: '#/components/parameters/ExternalIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [service_id, external_id]
+                            properties:
+                              service_id: { type: string }
+                              external_id: { type: string }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/agents/{external_id}/token:
+    post:
+      tags: [客服主体]
+      operationId: csAgentToken
+      summary: 签坐席令牌
+      description: |
+        坐席打开工作台前由你方后端调用，令牌交给工作台页面。有效 2 小时，页面会自动续期，从签发起最长 12 小时；
+        移除坐席或停用主体立即失效。无请求体。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+        - $ref: '#/components/parameters/ExternalIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [token, expires_at]
+                            properties:
+                              token: { type: string }
+                              expires_at: { $ref: '#/components/schemas/DateTime' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
 components:
   securitySchemes:
     ApiKey:
@@ -1293,6 +1561,18 @@ components:
       description: '接入方后端调「签用户令牌」拿到的用户令牌，放在 `Authorization: Bearer <令牌>`。'
 
   parameters:
+    ServiceIdPath:
+      name: sid
+      in: path
+      required: true
+      description: 主体标识，由你方定，建好后不能改
+      schema: { type: string, pattern: '^[a-z0-9_-]{1,40}$' }
+    ExternalIdPath:
+      name: external_id
+      in: path
+      required: true
+      description: 你方的员工标识，同一主体内唯一
+      schema: { type: string, pattern: '^[A-Za-z0-9_.@-]{1,64}$' }
     UserIdPath:
       name: user_id
       in: path
@@ -1303,14 +1583,14 @@ components:
       name: target
       in: path
       required: true
-      description: 被拉黑方 user_id，限 `[A-Za-z0-9_-]{1,64}`（所以 `@cs` 不合法）
+      description: 被拉黑方 user_id，限 `[A-Za-z0-9_-]{1,64}`（所以客服号不合法）
       schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
     PeerIdPath:
       name: peer_id
       in: path
       required: true
-      description: 会话对方的 user_id；该用户的客服会话写 `@cs`
-      schema: { type: string, pattern: '^(@cs|[A-Za-z0-9_-]{1,64})$' }
+      description: 会话对方的 user_id；该用户的客服会话写 `@cs`，其他客服主体写 `@cs:<主体标识>`
+      schema: { type: string, pattern: '^(@cs(:[a-z0-9_-]{1,40})?|[A-Za-z0-9_-]{1,64})$' }
     MessageIdPath:
       name: id
       in: path
@@ -1436,6 +1716,54 @@ components:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
 
   schemas:
+    ServiceSettings:
+      type: object
+      description: 主体自己的设置；没给的项用站点设置。
+      properties:
+        welcome_text: { type: string, maxLength: 200 }
+        queue_text: { type: string, maxLength: 200 }
+        offline_text: { type: string, maxLength: 200 }
+        timeout_minutes: { type: integer, minimum: 1, maximum: 1440, description: 双方都没说话多久后自动结束 }
+        rating_enabled: { type: boolean, description: 结束后是否邀请评价 }
+        visitor_enabled: { type: boolean, description: 是否允许没登录的网页访客咨询，默认不允许 }
+    ServiceInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64, description: 用户看到的客服名称 }
+        avatar_url: { type: string, maxLength: 512, description: http(s) 链接 }
+        settings: { $ref: '#/components/schemas/ServiceSettings' }
+    ServiceAgentInput:
+      type: object
+      required: [nickname]
+      properties:
+        nickname: { type: string, minLength: 1, maxLength: 32 }
+        avatar_url: { type: string, maxLength: 512 }
+        max_concurrent: { type: integer, minimum: 1, maximum: 50, description: 同时接待上限；新建缺省 5，已有的没传不改 }
+    ServiceBatch:
+      type: object
+      required: [services]
+      properties:
+        services:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            allOf:
+              - $ref: '#/components/schemas/ServiceInput'
+              - type: object
+                required: [service_id]
+                properties:
+                  service_id: { type: string, pattern: '^[a-z0-9_-]{1,40}$' }
+                  agents:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/ServiceAgentInput'
+                        - type: object
+                          required: [external_id]
+                          properties:
+                            external_id: { type: string, pattern: '^[A-Za-z0-9_.@-]{1,64}$' }
     DateTime:
       type: string
       pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
@@ -1517,7 +1845,7 @@ components:
       type: object
       required: [user_id, nickname, avatar_url]
       properties:
-        user_id: { type: string, description: 用户 id；平台客服为 `@cs` }
+        user_id: { type: string, description: "用户 id；平台客服为 `@cs`，其他客服主体为 `@cs:<主体标识>`" }
         nickname: { type: string, description: 昵称，可能为空串 }
         avatar_url: { type: string, description: 头像链接，可能为空串 }
 
@@ -1752,7 +2080,7 @@ components:
       description: 发消息请求。content 按 type 取对应形态，多余字段会被丢弃。
       required: [to, type, content, client_msg_id]
       properties:
-        to: { type: string, description: 接收方 user_id，不能是自己；客户端可填 `@cs` 发给平台客服 }
+        to: { type: string, description: "接收方 user_id，不能是自己；客户端可填 `@cs` 或 `@cs:<主体标识>` 发给客服" }
         type:
           type: string
           enum: [text, image, voice, file, video, location, custom]
@@ -1776,7 +2104,7 @@ components:
         - type: object
           required: [from]
           properties:
-            from: { type: string, description: 发送者 user_id，不能是 `@cs` }
+            from: { type: string, description: 发送者 user_id，不能是客服 }
 
     Message:
       type: object
@@ -1786,7 +2114,7 @@ components:
         id: { type: integer, format: int64 }
         conversation_id: { type: integer, format: int64 }
         seq: { type: integer, format: int64, description: 会话内序号，从 1 开始连续递增 }
-        from: { type: string, description: 发送者 user_id；客服发来的为 `@cs` }
+        from: { type: string, description: "发送者 user_id；客服发来的为 `@cs` 或 `@cs:<主体标识>`" }
         type:
           type: string
           enum: [text, image, voice, file, video, location, custom, recalled]
@@ -1807,7 +2135,7 @@ components:
         sender_role:
           type: string
           enum: [agent, bot, system]
-          description: 只有 `@cs` 的消息带。agent 坐席 / bot 机器人（内容由 AI 生成，界面要标识）/ system 系统提示；将来可能增加取值，不认识的按 system 处理
+          description: 只有客服的消息带。agent 坐席 / bot 机器人（内容由 AI 生成，界面要标识）/ system 系统提示；将来可能增加取值，不认识的按 system 处理
         created_at: { $ref: '#/components/schemas/DateTime' }
 
     MessagePage:
@@ -1838,7 +2166,7 @@ components:
 
     Conversation:
       type: object
-      description: 会话列表的一项。客服会话 `type` 为 `service`、`peer.user_id` 固定为 `@cs`。
+      description: 会话列表的一项。客服会话 `type` 为 `service`、`peer.user_id` 为 `@cs` 或 `@cs:<主体标识>`。
       required: [conversation_id, type, peer, last_message, unread, max_seq, read_seq, last_msg_at, clear_seq, pinned, pinned_at, muted]
       properties:
         conversation_id: { type: integer, format: int64 }
@@ -1872,7 +2200,7 @@ components:
       required: [conversation_id, peer_user_id, pinned, pinned_at, muted, clear_seq, unread, visible]
       properties:
         conversation_id: { type: integer, format: int64 }
-        peer_user_id: { type: string, description: 对方 user_id，客服会话为 `@cs` }
+        peer_user_id: { type: string, description: "对方 user_id，客服会话为 `@cs` 或 `@cs:<主体标识>`" }
         pinned: { type: boolean }
         pinned_at:
           description: 置顶时间，未置顶为 null
@@ -1947,7 +2275,7 @@ components:
       properties:
         event: { type: string, const: typing }
         conversation_id: { type: integer, format: int64 }
-        from: { type: string, description: 客服会话里为 `@cs` }
+        from: { type: string, description: 客服会话里是客服号 }
         expires_in: { type: integer, description: 秒 }
 
     PushReadAll:

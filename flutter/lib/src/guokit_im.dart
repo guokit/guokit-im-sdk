@@ -462,13 +462,16 @@ class GuokitIm {
   // ---------------- 客服 ----------------
 
   /// 当前客服接待状态，用于客服会话页顶部的「排队中，前面还有 N 位」状态条。
-  /// 服务端不推送，建议进入客服会话、收到 `@cs` 新消息时各刷新一次。站点没装客服时抛 [ImApiException]。
-  Future<ImCsState> csState() => _call(() {
+  /// 服务端不推送，建议进入客服会话、收到客服新消息时各刷新一次。站点没装客服时抛 [ImApiException]。
+  ///
+  /// [serviceId] 是客服主体标识（`conversation.serviceId`），不传或空串是平台客服；
+  /// 其他主体需要 IM 服务端 v1.20.0，旧服务端会忽略它、给平台客服的状态。
+  Future<ImCsState> csState({String? serviceId}) => _call(() {
     _requireLogin();
-    return _api.csState();
+    return _api.csState(serviceId: serviceId);
   });
 
-  /// 转人工，返回转完的状态（排队中或坐席接待中）；当前没有机器人接待时什么都不做，返回当前状态。
+  /// 转人工（只有平台客服支持），返回转完的状态（排队中或坐席接待中）；当前没有机器人接待时什么都不做，返回当前状态。
   /// 需要 IM 服务端 v1.12.0 及以上，旧服务端上抛 [ImApiException]。
   Future<ImCsState> handoffCs() => _call(() {
     _requireLogin();
@@ -494,7 +497,7 @@ class GuokitIm {
 
   static final _leavePhone = RegExp(r'^[0-9+\- ]{5,30}$');
 
-  /// 没有坐席在时留联系方式，把这次排队立刻转成留言，返回单号。[ImCsState.canLeave] 为 true 时再给用户表单；
+  /// 没有坐席在时留联系方式（只有平台客服支持），把这次排队立刻转成留言，返回单号。[ImCsState.canLeave] 为 true 时再给用户表单；
   /// 留言内容不用另填，就是用户这次在会话里说的话。
   ///
   /// [phone] 与 [email] 至少填一项，都去首尾空白：称呼 ≤50 字，电话为 5–30 位数字、`+`、`-`、空格，

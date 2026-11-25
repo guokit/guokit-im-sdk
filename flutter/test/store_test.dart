@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guokit_im/guokit_im.dart';
+import 'package:guokit_im/src/store.dart' show bumpConversation;
 import 'package:guokit_im/src/store_sqlite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -232,6 +233,15 @@ void main() {
         expect((await s.getConversation(1))!.peerReadSeq, null);
       });
     });
+  });
+
+  test('客服主体的第一条消息：会话类型是 service，取得到主体标识', () {
+    final c = bumpConversation(
+      null,
+      _msg(id: 1, seq: 1, from: '@cs:shop_1', cid: 'b'),
+    )!;
+    expect((c.type, c.serviceId), ('service', 'shop_1'));
+    expect(_conv(1, 'u2', maxSeq: 1).serviceId, null);
   });
 
   test('客服消息的 senderRole 入库读回，重复写入不丢', () async {

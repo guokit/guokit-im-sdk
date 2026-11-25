@@ -168,7 +168,7 @@ class ImMessage {
   /// 其余消息为 null。
   final DateTime? urlFetchedAt;
 
-  /// 平台客服（`@cs`）消息的发送者：`agent` 坐席 / `bot` 机器人 / `system` 系统提示；
+  /// 客服消息的发送者：`agent` 坐席 / `bot` 机器人 / `system` 系统提示；
   /// 普通消息为 null。旧版服务端、以及升级 SDK 前已缓存在本地的客服消息也是 null，按坐席显示即可。
   /// 保留字符串，服务端将来加取值时不至于解析失败，不认识的按 `system` 处理。
   final String? senderRole;
@@ -436,7 +436,7 @@ class ImPeer {
   /// `fromJson` 与 `fromServer` 键名相同。
   factory ImPeer.fromJson(Map json) = ImPeer.fromServer;
 
-  /// 平台客服固定为 `@cs`。
+  /// 客服是 `@cs`（平台客服）或 `@cs:<主体标识>`，见 [ImConversation.serviceId]。
   final String userId;
 
   /// 可能为空串。
@@ -451,6 +451,16 @@ class ImPeer {
     'avatar_url': avatarUrl,
   };
 }
+
+/// 从客服号取主体标识：平台客服 `@cs` 是空串，`@cs:<主体标识>` 是主体标识，不是客服返回 null。
+String? csServiceId(String userId) {
+  if (userId == '@cs') return '';
+  return userId.startsWith('@cs:') ? userId.substring(4) : null;
+}
+
+/// 客服主体的客服号，发消息时当对方 id 用；[serviceId] 不传是平台客服。
+String csUserId([String? serviceId]) =>
+    serviceId == null || serviceId.isEmpty ? '@cs' : '@cs:$serviceId';
 
 /// 一个会话（单聊或客服）。
 ///
@@ -513,9 +523,12 @@ class ImConversation {
 
   final int id;
 
-  /// `c2c` 普通单聊 / `service` 平台客服。
+  /// `c2c` 普通单聊 / `service` 客服。
   final String type;
   final ImPeer peer;
+
+  /// 客服会话的主体标识：平台客服是空串，其他主体是它的标识；不是客服会话为 null。
+  String? get serviceId => csServiceId(peer.userId);
 
   /// 本人清空过记录且之后没有新消息时为 null；极少数情况下服务端也会不给。
   final ImMessagePreview? lastMessage;
@@ -649,7 +662,7 @@ class ImTyping {
 
   final int conversationId;
 
-  /// 正在输入的人；客服会话里为 `@cs`。
+  /// 正在输入的人；客服会话里是客服号（`@cs` 或 `@cs:<主体标识>`）。
   final String from;
 
   /// true 显示「正在输入」，false 收起（过期，或收到了他的消息）。

@@ -77,7 +77,7 @@
 }
 ```
 
-平台客服 `@cs` 的消息另带 `sender_role`，见 §10.2。
+客服（`@cs` 与 `@cs:<主体标识>`，§10.11）的消息另带 `sender_role`，见 §10.2。
 
 **撤回后的消息** `type` 变成 `recalled`，`content` 为 `{"by": "sender" | "agent" | "server"}`（发送者 / 坐席 / 接入方），其余字段不变，原文不再给出，见 §5.12。**`type` 将来可能增加取值，不认识的按「暂不支持的消息」兜底显示，不要报错。**
 
@@ -182,7 +182,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 - **A 拉黑 B 后，B 发给 A 的消息回 `IM_BLOCKED`**（HTTP 200 + 业务码）：消息不落库、不推送、不触发 before_send、不产生 after_send 回调。客户端发与服务端代发（§4.5）都拦截。
 - **A 发给 B 不受影响**，拉黑只管「拒收对方」。
 - 拉黑前已成功发出的消息，弱网重发（同一 `client_msg_id`）仍返回原消息，不会报被拉黑；被拦的尝试也不占发送限速配额。
-- 双方 `user_id` 只校验格式（`[A-Za-z0-9_-]{1,64}`），**不要求已导入**。不能拉黑自己，也不能拉黑 `@cs`，均回 400 `VALIDATION`。
+- 双方 `user_id` 只校验格式（`[A-Za-z0-9_-]{1,64}`），**不要求已导入**。不能拉黑自己，也不能拉黑客服（`@cs`、`@cs:…`），均回 400 `VALIDATION`。
 - 拉黑、解除都是幂等的：重复拉黑不报错、不改拉黑时间；解除不存在的记录也返回成功。两者都返回 `{}`。
 - 拉黑与解除不推送事件、不触发回调；已存在的会话与历史消息不动，双方照常能看到。
 
@@ -226,7 +226,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 替某个用户置顶 / 免打扰、清空记录、删除会话。含义、返回值与客户端接口（§5.10）完全相同，改的是同一份数据；成功后同样向**该用户**的所有在线设备推 `conversation_changed`（§6），对方不会收到任何通知。
 
-接入方后端手里通常是好友的 user_id 而不是会话 id，所以这组接口**按对方定位会话**：`{user_id}` 是设置归属的用户，`{peer_id}` 是对方的 user_id，客服会话写 `@cs`。
+接入方后端手里通常是好友的 user_id 而不是会话 id，所以这组接口**按对方定位会话**：`{user_id}` 是设置归属的用户，`{peer_id}` 是对方的 user_id，客服会话写 `@cs`（其他客服主体写 `@cs:<主体标识>`，§10.11）。
 
 | 方法 | 路径 | 请求体 | 说明 |
 |---|---|---|---|
@@ -256,7 +256,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 ### 4.10 撤回消息 `POST /messages/{id}/recall`
 
 无请求体，返回撤回后的消息对象。**不限时、不看站点的撤回开关**，用于处理违规内容。效果与用户自己撤回相同（§5.12），`content.by` 为 `server`。
-渠道用户（网页访客、微信）参与的会话、`@cs` 发的消息都按不存在处理，回 404 `VALIDATION`。已撤回的再调返回同一结果，不再推送、不再回调。
+渠道用户（网页访客、微信）参与的会话、客服发的消息都按不存在处理，回 404 `VALIDATION`。已撤回的再调返回同一结果，不再推送、不再回调。
 撤回后 §4.6 的审计查询也只给撤回后的形态，**原文只在 IM 后台的「消息查询」里看得到**。
 
 ## 5. 客户端接口（App / Web 调用）
@@ -416,7 +416,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | DELETE | `/blocks/{target}` | 解除，返回 `{}` |
 | GET | `/blocks?offset=&limit=` | 列表，按拉黑时间倒序；`limit` 默认 50、最大 200 |
 
-列表返回 `{"items": [{"user_id", "created_at"}], "has_more"}`，同 §4.7。`target` 不合法、是自己或是 `@cs` → 400 `VALIDATION`。
+列表返回 `{"items": [{"user_id", "created_at"}], "has_more"}`，同 §4.7。`target` 不合法、是自己或是客服 → 400 `VALIDATION`。
 
 ### 5.8 一键清全部未读 `POST /conversations/read-all`
 
@@ -515,7 +515,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 
 | 字段 | 说明 |
 |---|---|
-| peer_user_id | 对方 user_id，客服会话为 `@cs` |
+| peer_user_id | 对方 user_id，客服会话为 `@cs` 或 `@cs:<主体标识>` |
 | pinned / pinned_at | 是否置顶、置顶时间；未置顶为 `false` / `null` |
 | muted | 是否免打扰 |
 | clear_seq | 清空到的序号，`seq <= clear_seq` 的消息本人看不到；没清空过为 `0` |
@@ -640,7 +640,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - `conversation_changed` 只推给自己的所有在线设备（含发起设备），用于多端同步置顶、免打扰、清空与删除（§5.10）。`action` 为 `settings`（置顶 / 免打扰）/ `clear` / `delete`，`conversation` 是完整的会话设置对象，直接覆盖本地即可，不必按 `action` 推算；本地消息怎么清理见 §5.10「客户端本地处理」。离线时漏掉的用 §5.11 补齐。
 - `message_recalled` 推给双方的所有在线设备（含发起设备），按 `message.id` 替换本地那条（§5.12）。本地没有这个会话时忽略，不要因此新建会话。离线时漏掉的用 §5.13 补齐。
 - `peer_read` 推给**对方**的所有在线设备，只进不退（§5.14）。
-- `typing` 表示 `from` 正在输入，`expires_in` 秒内没有新的、或收到了他的消息就不再显示（§5.15）；客服会话里 `from` 为 `@cs`。
+- `typing` 表示 `from` 正在输入，`expires_in` 秒内没有新的、或收到了他的消息就不再显示（§5.15）；客服会话里 `from` 是那个客服的号（`@cs` 或 `@cs:<主体标识>`）。
 - 将来可能增加事件，不认识的忽略即可。
 
 **断开码**（SDK 的 disconnected 事件里的 `code`）：
@@ -802,8 +802,8 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
   `from_source` / `to_source` 是收发双方的来源，见 §8.5。
   `to_online` 表示发送时接收方是否至少有一条长连接。上传的图片、语音、文件、视频的 `message.content.url`（视频另有 `cover_url`）约 24 小时有效。
-  `to_muted` 表示接收方是否对该会话开了免打扰（§5.10），为 `true` 时建议不发离线推送；`to` 为 `@cs` 时恒为 `false`；极少数查询失败的情况下该字段缺省，请按「缺省就当没开免打扰」处理。
-  `to_unread_total` 是接收方此刻所有**非免打扰**会话的未读之和（**已含这条消息**；接收方对该会话开了免打扰时，这条不计入），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
+  `to_muted` 表示接收方是否对该会话开了免打扰（§5.10），为 `true` 时建议不发离线推送；`to` 为客服时恒为 `false`；极少数查询失败的情况下该字段缺省，请按「缺省就当没开免打扰」处理。
+  `to_unread_total` 是接收方此刻所有**非免打扰**会话的未读之和（**已含这条消息**；接收方对该会话开了免打扰时，这条不计入），推送时可直接用作角标；`to` 为客服时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
 - 成功判定：HTTP 200 且响应体 `{"code": 0}`（`code` 为数字）。
 - 失败重试：单次超时 5 秒；第 1 次失败后约 1 分钟重试，第 2 次失败后约 5 分钟重试，第 3 次失败标记为失败、不再自动重试，可在「回调记录」手动重投（重投保持原投递 id）。实际时刻按分钟对齐。
 - 请**先落库去重再处理**：以 `X-Im-Delivery-Id` 建唯一键，见过的直接回 `{"code":0}`。
@@ -883,9 +883,9 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | `app` | 接入方自己导入的用户 | `from_source` / `to_source` / `source` |
 | `visitor` | 网页访客：站点开放网页客服时由站点自己建的匿名用户，**不在接入方的用户体系里** | `from_source` / `to_source` / `source` |
 | `wechat` | 公众号 / 小程序客服的用户：站点接了微信渠道时由站点自己建，**不在接入方的用户体系里** | `from_source` / `to_source` / `source` |
-| `service` | 平台客服 `@cs` | `from_source` / `to_source` |
+| `service` | 客服（`@cs` 与 `@cs:<主体标识>`） | `from_source` / `to_source` |
 
-- 访客与微信用户只能与 `@cs` 往来：普通用户、服务端代发都不能给他们发消息，也不能给他们签令牌、封禁或解封（§4.4 的 `PATCH`），一律回 `IM_USER_NOT_FOUND`；§4.1、§4.2 导入撞上他们的 user_id 时不改资料。要封禁在 IM 后台操作。
+- 访客与微信用户只能与客服往来（访客能找开放了访客的客服主体，微信用户只有 `@cs`）：普通用户、服务端代发都不能给他们发消息，也不能给他们签令牌、封禁或解封（§4.4 的 `PATCH`），一律回 `IM_USER_NOT_FOUND`；§4.1、§4.2 导入撞上他们的 user_id 时不改资料。要封禁在 IM 后台操作。
 - 他们的消息照常走 before_send、after_send（访客还有上下线），内容审核、归档可沿用同一套逻辑；**不要给他们发离线推送**（没有设备；微信的回复由站点发回微信），也不要拿他们的 user_id 去自己的用户表里查。想让坐席知道微信用户是你的哪个会员，实现 §8.6。
 - 站点没开放网页客服时不会出现 `visitor`，没接微信渠道时不会出现 `wechat`。字段缺省（旧版本服务端）按 `app` 处理；将来可能增加取值，不认识的按「不是自己的用户」处理。
 
@@ -960,6 +960,8 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 站点没装客服模块时，`@cs` 表现为一个不存在的用户：发给它回 `IM_USER_NOT_FOUND`。
 
+一个站点需要**多个各自接待的客服**（如平台里每家门店一个）时，见 §10.11；下面以平台客服 `@cs` 为例，其余主体同样适用，差别都写在 §10.11。
+
 ### 10.1 发起咨询
 
 客户端调 §5.1 发消息，`to` 填 `"@cs"`，其余字段照常（各种消息类型都可以发，上传的图片、语音、文件、视频同样要带 `ticket`）。坐席也能给用户发文件与视频，收到的形状与普通消息相同。
@@ -980,7 +982,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
   "pinned": false, "pinned_at": null, "muted": false, "clear_seq": 0 }
 ```
 
-- `type` 为 `"service"`（普通单聊为 `"c2c"`），`peer.user_id` 固定为 `"@cs"`；`nickname` / `avatar_url` 取站点后台「客服设置」里的客服名称与头像（默认「平台客服」、无头像）。它和普通会话一样按消息时间排序，建议给它单独做入口，或引导用户置顶（§5.10）。
+- `type` 为 `"service"`（普通单聊为 `"c2c"`），**判断是不是客服会话看 `type`**；`peer.user_id` 为 `"@cs"`；`nickname` / `avatar_url` 取站点后台「客服设置」里的客服名称与头像（默认「平台客服」、无头像）。它和普通会话一样按消息时间排序，建议给它单独做入口，或引导用户置顶（§5.10）。
 - 每个用户与 `@cs` **只有一条长期会话**，历次咨询的消息都在这一条里按 seq 连续排列，不会因为接待结束换新会话。用户清空或删除后，自己只看得到之后的消息，坐席工作台里的历史不受影响。
 - 客服发来的消息 `from` 均为 `"@cs"`，不暴露是哪位坐席回复的。
 - **`@cs` 的消息多带一个 `sender_role`**（拉取、推送、回调都有，普通消息没有）：`agent` 坐席回复 / `bot` 机器人回复 / `system` 系统提示。`bot` 的内容由 AI 生成，**界面上要向用户标识**（如「AI 生成」）。将来可能增加取值，不认识的按 `system` 处理。
@@ -1056,13 +1058,13 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 | 方向 | `data.message.from` | `data.to` | `data.to_online` | 处理建议 |
 |---|---|---|---|---|
-| 用户 → 客服 | 用户 user_id | `"@cs"` | 恒为 `false` | **跳过离线推送**：`@cs` 不是真实用户，没有设备可推；坐席端由客服工作台自己提醒 |
+| 用户 → 客服 | 用户 user_id | `"@cs"` | 恒为 `false` | **跳过离线推送**：`@cs` 不是真实用户，没有设备可推；坐席端由客服工作台自己提醒。其他客服主体要推员工手机，见 §10.11 |
 | 客服 → 用户（坐席回复、提示语、评价邀请） | `"@cs"` | 用户 user_id | 发送时用户是否在线 | 与普通消息相同：`to_online === false` 且 `to_muted` 不为 `true` 时给 `to` 发离线推送，标题可用客服名称，文字用会话预览口径 |
 
 `data.to_muted` 在用户 → 客服方向恒为 `false`，客服 → 用户方向是用户对客服会话的免打扰设置。按 §8.3 的示例改一行即可：
 
 ```php
-if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'] === false && empty($d['to_muted'])) {
+if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') && $d['to_online'] === false && empty($d['to_muted'])) {
     queueOfflinePush($d['to'], $d['message']);
 }
 ```
@@ -1093,6 +1095,8 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 </script>
 <script src="https://im.example.com/imcs-widget/loader.js" async></script>
 ```
+
+找某个客服主体时，配置里加 `service: "主体标识"`（§10.11），窗口的名称、头像、会话都是它的；不填是平台客服。
 
 | 方法 | 说明 |
 |---|---|
@@ -1157,6 +1161,85 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 - 你先按微信规则在 5 秒内响应微信，转发异步做，不必等站点返回。站点校验通过回 `success`，校验不通过回 403，暂时出错回 500（可重试；同一条消息重复转发只处理一次，超过 1 小时的不再接收）。
 - 站点后台设了**关注自动回复**或**点击菜单的回复**时，站点会直接回用户，你的系统就不要再回同一个事件；没设的一律不回。这两种事件要在 1 分钟内转发到，晚了微信不让回。
 - 站点不会用 `force_refresh` 换 token，不影响你自己用 `getAccessToken` 取的 access_token。但同一个用户的 48 小时 5 条额度是两边共用的。
+
+### 10.11 客服主体：一个站点里多个各自接待的客服
+
+平台型业务里，每家门店、每个商户、每个部门都要有自己的客服，由自己的员工接待。每一个这样的客服叫一个**主体**，由你方后端经接口维护；平台客服 `@cs` 是默认主体，照旧在后台配置。需要 IM 服务端 v1.20.0。
+
+| | 默认主体（平台客服） | 其他主体 |
+|---|---|---|
+| user_id | `@cs` | `@cs:<主体标识>`，如 `@cs:shop_1001` |
+| 谁接待 | 站点后台的坐席 | 你方的员工，不需要后台账号 |
+| 在哪接待 | 后台客服工作台、桌面端 | 工作台嵌进你方后台，或在你方 App 里打开 |
+| 会话 | 每个用户一条 | 每个用户与每个主体各一条，互不相通 |
+| 机器人、留言、工单、微信渠道 | 有 | 没有 |
+
+主体之间完全隔离：坐席只看得到本主体的会话、历史、快捷回复，只能转给本主体的坐席。平台管理员在后台能看各主体的接待记录、能停用主体。
+
+#### 用户侧
+
+- 发消息 `to` 填 `@cs:<主体标识>`，其余与发给 `@cs` 完全相同。主体不存在或已停用回 `IM_USER_NOT_FOUND`。
+- 会话列表里 `type` 为 `service`、`peer.user_id` 为 `@cs:<主体标识>`，名称头像取主体的。**判断客服会话请看 `type`，不要写死 `=== "@cs"`。**
+- 接待状态 `GET /api/imcs/v1/state?service_id=<主体标识>`；评价同 §10.5；转人工与留言不支持，带 `service_id` 调用回 400。`leave_enabled` 恒为 `false`。
+- **旧版 App 会把主体会话当成普通单聊显示**，收发不受影响。请等用户升级后再放出入口。
+
+#### 维护主体与坐席
+
+路径前缀 `/api/imcs/v1/server`，鉴权用 `X-Api-Key`，调用频率与 §4 合计。**任一接入应用的 Key 能管全部主体。** 主体标识 `sid` 限 `[a-z0-9_-]{1,40}`，建好后不能改；员工标识 `external_id` 限 `[A-Za-z0-9_.@-]{1,64}`，同一主体内唯一。
+
+| 方法 | 路径 | 请求体 | 说明 |
+|---|---|---|---|
+| PUT | `/services/{sid}` | `{"name", "avatar_url"?, "settings"?}` | 建或改。没传 `settings` 不改设置，传了整个替换；不改启停 |
+| PATCH | `/services/{sid}` | `{"status": 0\|1}` | 停用：用户发不进来，未结束的接待结束，坐席令牌失效并断开 |
+| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "avatar_url"?, "max_concurrent"?}` | 建或改坐席；移除过的重新启用 |
+| DELETE | `/services/{sid}/agents/{external_id}` | 无 | 移除：令牌失效、断开，接待中的转回排队。历史接待里仍显示这名坐席 |
+| POST | `/services/{sid}/agents/{external_id}/token` | 无 | 签坐席令牌，返回 `{"token", "expires_at"}` |
+| GET | `/services/{sid}/summary` | — | 资料、设置、坐席数 `agents`、在线坐席 `agents_online`、排队 `queue_count` |
+| POST | `/services/batch` | `{"services": [{"service_id", "name", …, "agents": [{"external_id", "nickname", …}]}]}` | 首次导入用，每批最多 100 个主体、合计 500 个坐席；遇错即停并指出第几个，可整批重试 |
+
+```bash
+curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
+  -H "X-Api-Key: imk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" -H "Content-Type: application/json" \
+  -d '{"name": "甲店客服", "avatar_url": "https://img.example.com/1.png", "settings": {"visitor_enabled": true}}'
+```
+
+`settings` 的各项没给时用站点设置：`welcome_text` / `queue_text` / `offline_text`（≤200 字）、`timeout_minutes`（1–1440）、`rating_enabled`、`visitor_enabled`（允许没登录的网页访客咨询，默认不允许，站点也要打开）。
+
+你方要做的：主体、员工有变动时同步过来；员工离职、门店关停要及时移除或停用。没有坐席的主体照常收消息、排队。
+
+#### 嵌入工作台
+
+先在后台「客服坐席 → 网页客服 → 允许嵌入客服工作台的网站」填你方后台的来源（如 `https://admin.example.com`，不带路径），不在名单里的网站打不开。
+
+```html
+<div id="desk" style="height:100vh"></div>
+<script src="https://im.example.com/imcs-widget/desk-loader.js"></script>
+<script>
+  const desk = GuokitDesk.mount("#desk", {
+    token: "你方后端签的坐席令牌",
+    onTokenExpired: async () => desk.setToken(await fetchDeskTokenFromYourBackend()),
+    onUnread: (count) => {},           // 未读数变了，可显示在菜单上
+    onRemind: (title, body) => {},     // 页面在后台时来了新消息，由你方弹通知
+  })
+</script>
+```
+
+`desk.setToken(token)` 换员工（传空串退出），`desk.destroy()` 移除。令牌有效 2 小时，页面自动续期；从签发起最长 12 小时，到时回调 `onTokenExpired`。**你方后端签令牌前必须自己确认该员工此刻有权限**，令牌泄露等于对方能以这名员工的身份接待。
+
+**在 App 里接待**（页面适配手机宽度）：用 WebView 打开 `https://im.example.com/imcs-desk#token=<坐席令牌>`，令牌放在 `#` 后面，不会发到服务器日志。页面给 App 的消息走名为 `GuokitDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `guokitdesk:ready` / `guokitdesk:token-expired` / `guokitdesk:unread`（带 `count`）/ `guokitdesk:remind`（带 `title`、`body`）；App 换令牌执行 `window.GuokitDesk.setToken("…")`。发图片、文件要在 WebView 里放开文件选择。
+
+#### 员工不在线时的提醒
+
+工作台开着时由工作台提醒。没开时要推员工手机，靠 after_send（§8.2）：主体相关的消息 `data` 多带
+
+| 字段 | 说明 |
+|---|---|
+| service_id | 主体标识；两个方向都有，默认主体没有 |
+| agents_online | 用户 → 主体方向：此刻在线的坐席数 |
+| agent_external_id | 用户 → 主体方向：正在接待这位用户的员工，没有为空串 |
+| agent_online | 用户 → 主体方向：该员工是否在线 |
+
+建议：`agent_external_id` 非空且 `agent_online` 为 `false` 时推那名员工；为空且 `agents_online` 为 `0` 时推该主体的全部员工。极少数查询失败的情况下后三项缺省，按 `0`、空串、`false` 处理。主体发给用户的消息，离线推送与普通客服消息相同。
 
 ## 11. SDK、接口规范与 AI 接入
 

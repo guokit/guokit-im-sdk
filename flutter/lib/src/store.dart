@@ -250,7 +250,7 @@ ImConversation? bumpConversation(ImConversation? conv, ImMessage m) {
     if (peerId.isEmpty) return null;
     return ImConversation(
       id: m.conversationId!,
-      type: peerId == '@cs' ? 'service' : 'c2c',
+      type: csServiceId(peerId) == null ? 'c2c' : 'service',
       peer: ImPeer(userId: peerId, nickname: '', avatarUrl: ''),
       lastMessage: preview,
       maxSeq: seq,

@@ -2,6 +2,14 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## 未发布
+
+客服主体：一个站点里多个各自接待的客服（如每家门店一个）。需要 IM 服务端 v1.20.0；旧服务端上给主体发消息为用户不存在，`csState(serviceId)` 会给平台客服的状态，其余功能不受影响。**旧版 App 会先把主体会话当成普通单聊显示，请等用户都升级后再放出入口。**
+
+- **Flutter**：新增 `csUserId` / `csServiceId`、`ImConversation.serviceId`，`csState` 加可选参数 `serviceId`；收到主体的第一条消息时会话类型正确为 `service`。只加不改
+- **PHP**：新增 `upsertService`、`setServiceStatus`、`serviceSummary`、`importServices`、`upsertServiceAgent`、`removeServiceAgent`、`issueAgentToken`；README 的 after_send 示例改为排除全部客服
+- 接入文档新增 §10.11 客服主体（维护接口、嵌入工作台、员工离线提醒），§10.7 挂件加 `service`；OpenAPI、Skill、`llms-full.txt` 同步
+
 ## v0.9.0 — 2026-11-25
 
 文件与视频消息。需要 IM 服务端 v1.19.0；旧服务端上 `features()` 两项按 0，发送失败，其余功能不受影响。**要站点在「IM 设置」打开（默认关闭）；旧版 App 不认识这两种消息，会话预览是空白，请等用户都升级后再打开。**

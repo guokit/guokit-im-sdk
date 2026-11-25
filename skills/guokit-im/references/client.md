@@ -193,6 +193,8 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 站点开了机器人时 `status` 多一个 `bot`，可放「转人工」按钮调 `POST /api/imcs/v1/handoff`；不认识的 `status` 按 `none` 处理。`@cs` 的消息带 `sender_role`：`agent` / `bot` / `system`，**`bot` 的内容由 AI 生成，界面要标识**（Flutter 用 `msg.isBot`）。
 网站只要客服窗口、不自己写聊天界面的，用站点自带的挂件：一行 `<script src="https://<IM 域名>/imcs-widget/loader.js" async></script>`，已登录用户传 `window.GuokitCSConfig.token`，见接入文档 §10.7。
 
+站点里每家门店 / 商户各有客服的，把 `to` 换成 `@cs:<主体标识>`，会话列表里 `type` 同为 `service`，接待状态带 `?service_id=<主体标识>`，没有机器人与留言，见接入文档 §10.11。Flutter SDK 用 `csUserId(id)` 得到客服号、`conversation.serviceId` 取主体标识、`csState(serviceId: …)`。
+
 ## 7. 业务卡片
 
 订单、商品、文章这类「点开是详情页」的消息用 `custom` 发，并在 `data.im_card` 里带标准卡片外壳：`title` 必填，`kind`、`subtitle`、`image`、`fields`（最多 6 行发送时快照）可选，链接按端分 `web_link`（https，网页与客服工作台）、`app_link`（App 内跳转）、`mp_path` + 可选 `mp_appid`（小程序）。不合规范整条拒收（`VALIDATION`）。自家已有卡片协议的，在同一个 `data` 里加 `im_card` 键即可。Flutter SDK 收到时用 `msg.card` 解析。详见接入文档 §5.9。

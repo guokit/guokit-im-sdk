@@ -81,6 +81,33 @@ class ClientTest extends TestCase
         $this->assertSame('/api/im/v1/server/messages/1024/recall', $req->getUri()->getPath());
     }
 
+    public function testServiceMethods(): void
+    {
+        $ok = json_encode(['code' => 0, 'message' => 'ok', 'data' => ['service_id' => 'shop_1', 'token' => 'tk']]);
+        $cases = [
+            [fn(Client $im) => $im->upsertService('shop_1', '甲店'), 'PUT', '/services/shop_1', ['name' => '甲店', 'avatar_url' => '']],
+            [fn(Client $im) => $im->upsertService('shop_1', '甲店', '', []), 'PUT', '/services/shop_1', ['name' => '甲店', 'avatar_url' => '', 'settings' => []]],
+            [fn(Client $im) => $im->setServiceStatus('shop_1', 0), 'PATCH', '/services/shop_1', ['status' => 0]],
+            [fn(Client $im) => $im->serviceSummary('shop_1'), 'GET', '/services/shop_1/summary', null],
+            [fn(Client $im) => $im->importServices([['service_id' => 'a', 'name' => 'A']]), 'POST', '/services/batch', ['services' => [['service_id' => 'a', 'name' => 'A']]]],
+            [fn(Client $im) => $im->upsertServiceAgent('shop_1', 'e@x', '小王', '', 3), 'PUT', '/services/shop_1/agents/e%40x', ['nickname' => '小王', 'avatar_url' => '', 'max_concurrent' => 3]],
+            [fn(Client $im) => $im->removeServiceAgent('shop_1', 'e1'), 'DELETE', '/services/shop_1/agents/e1', null],
+            [fn(Client $im) => $im->issueAgentToken('shop_1', 'e1'), 'POST', '/services/shop_1/agents/e1/token', null],
+        ];
+        foreach ($cases as [$call, $method, $path, $body]) {
+            $im = $this->client(new Response(200, [], $ok));
+            $this->assertSame('shop_1', $call($im)['service_id']);
+            $req = $this->history[0]['request'];
+            $this->assertSame($method, $req->getMethod());
+            $this->assertSame('/api/imcs/v1/server' . $path, $req->getUri()->getPath());
+            $this->assertSame($body, json_decode((string) $req->getBody(), true));
+        }
+        // 空设置要发成 {}，发成 [] 会被服务端拒绝
+        $im = $this->client(new Response(200, [], $ok));
+        $im->upsertService('shop_1', '甲店', '', []);
+        $this->assertStringContainsString('"settings":{}', (string) $this->history[0]['request']->getBody());
+    }
+
     public function testIssueTokenOk(): void
     {
         $im = $this->client(new Response(200, [], json_encode([
