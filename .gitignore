@@ -9,3 +9,8 @@ flutter/build/
 flutter/pubspec.lock
 flutter/example/.dart_tool/
 flutter/example/build/
+
+js/dist/
+js/LICENSE
+*.tgz
+.task-state.md

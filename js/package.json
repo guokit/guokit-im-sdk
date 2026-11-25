@@ -1,0 +1,27 @@
+{
+  "name": "@guokit/im",
+  "version": "0.12.0",
+  "description": "guokit IM 客户端 SDK：浏览器、uni-app、微信小程序",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/guokit/guokit-im-sdk.git", "directory": "js" },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": { "centrifuge": "5.8.0" },
+  "devDependencies": { "esbuild": "^0.28.2", "typescript": "5.9.3", "vitest": "^4.0.0" }
+}

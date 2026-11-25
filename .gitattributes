@@ -1,5 +1,6 @@
 # PHP 发行包（composer dist）只带 php/ 与根文件
 /flutter export-ignore
+/js export-ignore
 /docs export-ignore
 /spec export-ignore
 /skills export-ignore
