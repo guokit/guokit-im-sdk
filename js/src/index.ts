@@ -4,3 +4,5 @@ export type {
   ImBlockItem, ImCard, ImConnectionState, ImConversation, ImCsState, ImCsStatus, ImFeatures, ImMessage,
   ImMessagePreview, ImMessageStatus, ImPeer, ImSendProgress, ImToken, ImTyping,
 } from './models.js'
+export { GuokitIm, type ImConfig, type ImEvents } from './client.js'
+export type { ImFile, ImPlatform } from './platform/types.js'
