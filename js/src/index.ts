@@ -6,3 +6,4 @@ export type {
 } from './models.js'
 export { GuokitIm, type ImConfig, type ImEvents } from './client.js'
 export type { ImFile, ImPlatform } from './platform/types.js'
+export { uniPlatform, type UniLike } from './platform/uni.js'
