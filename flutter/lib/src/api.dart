@@ -362,6 +362,26 @@ class ImApi {
     return d['ticket_no'] as String;
   }
 
+  bool _invalid = false;
+
+  /// 登出时调：在途请求的结果作废，不再换令牌重试——否则会拿新账号的令牌重发旧账号的请求。
+  /// 之后这个实例上的调用都抛 [StateError]。
+  void invalidate() => _invalid = true;
+
+  void _check() {
+    if (_invalid) throw StateError('已登出');
+  }
+
+  /// 取令牌或等响应，期间登出了的（不论成败）统一抛 [StateError]。
+  Future<T> _alive<T>(Future<T> Function() f) async {
+    _check();
+    try {
+      return await f();
+    } finally {
+      _check();
+    }
+  }
+
   /// 关闭底层 HTTP 客户端（只关自己创建的，外部传入的由调用方管理）。
   void close() {
     if (_ownsClient) _client.close();
@@ -402,17 +422,20 @@ class ImApi {
   /// HTTP 401 + `IM_TOKEN_INVALID` 时换令牌后重试一次；再失败照常抛。
   /// 换令牌时 `tokenProvider` 抛的异常（含 [ImKickedOutException]）原样上抛。
   Future<Object?> _send(_Build build, {Duration? timeout}) async {
-    var token = await _tokens.current();
+    var token = await _alive(_tokens.current);
     try {
       return await _once(await build(token), timeout ?? this.timeout);
     } on ImApiException catch (e) {
       if (e.httpStatus != 401 || !e.isTokenInvalid) rethrow;
     }
-    token = await _tokens.refresh(stale: token);
+    token = await _alive(() => _tokens.refresh(stale: token));
     return _once(await build(token), timeout ?? this.timeout);
   }
 
-  Future<Object?> _once(http.BaseRequest req, Duration timeout) async {
+  Future<Object?> _once(http.BaseRequest req, Duration timeout) =>
+      _alive(() => _request(req, timeout));
+
+  Future<Object?> _request(http.BaseRequest req, Duration timeout) async {
     final http.Response res;
     try {
       res = await _client

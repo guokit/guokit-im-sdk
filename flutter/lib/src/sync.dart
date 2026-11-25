@@ -339,6 +339,7 @@ class ImSync {
       if (p != null) prev[i] = p.status;
     }
     final results = await store.upsertMessages(msgs);
+    if (_closed) return;
     for (var i = 0; i < results.length; i++) {
       final r = results[i];
       if (msgs[i].isRecalled) {
