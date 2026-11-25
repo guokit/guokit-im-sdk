@@ -1,6 +1,6 @@
 # IM 接入文档
 
-本文面向接入方的**后端**与**客户端（App / Web）**开发。能力：单聊；文本 / 图片 / 语音 / 文件 / 视频 / 位置 / 自定义七种消息；撤回；对方已读；正在输入；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后 / 撤回回调。
+本文面向接入方的**后端**与**客户端（App / Web / 小程序）**开发。能力：单聊；文本 / 图片 / 语音 / 文件 / 视频 / 位置 / 自定义七种消息；撤回；对方已读；正在输入；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后 / 撤回回调。
 群聊暂不提供。撤回、对方已读、文件与视频消息要站点在「IM 设置」打开才可用（默认关闭）。
 
 下文 `https://im.example.com` 代表你的 IM 服务域名，换成实际地址。
@@ -37,7 +37,7 @@
 2. **导入用户**：存量用户用 `POST /server/users/batch` 批量导入；新注册 / 改昵称头像时调 `PUT /server/users/{user_id}`。
 3. **登录时签令牌**：用户登录你的产品后，后端调 `POST /server/users/{user_id}/token`，把 `token` 与 `expires_at` 下发给 App。
 4. **App 连长连接并拉会话**：App 用令牌连 WebSocket（§6），连上后拉会话列表（§7）。
-5. **配回调（可选）**：IM 后台 →「IM 设置」填回调地址、回调密钥，按需开启发送前回调；Web 端还要在这里加 Origin 白名单。
+5. **配回调（可选）**：IM 后台 →「IM 设置」填回调地址、回调密钥，按需开启发送前回调；Web 端还要在这里加 Origin 白名单，微信小程序要在小程序后台加 IM 的四类合法域名（§6）。
 
 ## 3. 通用约定
 
@@ -619,6 +619,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - 协议：[Centrifuge](https://centrifugal.dev/) 客户端协议（JSON 与 Protobuf 均支持），请用官方 SDK：
   - Flutter：pub 包 `centrifuge`（<https://github.com/centrifugal/centrifuge-dart>），自动走 Protobuf 子协议，无需额外参数
   - Web：npm 包 `centrifuge`（<https://github.com/centrifugal/centrifuge-js>）
+  - 小程序：没有官方 SDK，用 `@guokit/im`（§11）。Flutter、浏览器、uni-app、微信小程序都建议直接用 §11 的 SDK，本节的规则它们都已实现
 - 鉴权：连接时把**用户令牌**作为 SDK 的 `token` 传入（不是 HTTP 头）。
 - **不需要、也不允许客户端订阅任何频道**。连上后服务端自动把你订阅到专属频道，所有推送从 SDK 的**服务端订阅 publication 事件**收（Dart：`client.publication`；JS：`centrifuge.on('publication', …)`）。调用 `newSubscription` 会被拒绝。
 - 长连接不接收任何业务命令，发消息、标已读都走 HTTP。
@@ -659,6 +660,8 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 **Origin 规则**：不带 `Origin` 头的连接（Flutter 等原生 App）直接放行；带 `Origin` 时放行与 IM 域名同源的页面，以及「IM 设置 → 允许的 Origin」里精确匹配的 `scheme://host[:port]`（最多 20 个）。Web 端跨域接入必须先加白名单。
 
 同一份白名单也用于**客户端 HTTP 接口的跨域**（`/api/im/v1/*` 终端用户接口与 `/api/imcs/v1/*`）：白名单内的页面可直接从浏览器调用，预检 `OPTIONS` 回 204 并放行 `Authorization`、`Content-Type` 请求头；白名单外的预检回 403。服务端接口 `/api/im/v1/server/*` 不支持浏览器跨域调用（API Key 不能出现在前端）。
+
+小程序不走浏览器的跨域规则，握手带不带 `Origin` 由宿主决定。微信小程序要在小程序后台把 IM 域名加进 request、socket、uploadFile、downloadFile 四类合法域名，附件走云存储的另加云存储域名。附件链接（`/files`）不带跨域头：浏览器里只能给 `<img>` / `<video>` / `<audio>` / 链接用，不能 `fetch`。
 
 **Dart 最小示例**（`centrifuge: ^0.21.0`）：
 
@@ -1307,8 +1310,9 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 公开仓库 <https://github.com/guokit/guokit-im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
 
 - **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。0.9.0 起提供文件与视频 `sendFile` / `sendVideo`（按路径发时边读边传）、`fileUrl` / `videoUrl` / `videoCoverUrl` 与上传进度 `onSendProgress`（§5.1、§5.6，需要服务端 v1.19.0）；选文件、压缩转码、截封面、播放、下载由 App 自己做。0.10.0 起提供客服主体 `csUserId` / `ImConversation.serviceId` 与 `csState(serviceId: …)`（§10.11，需要服务端 v1.20.0）。0.11.0 Flutter 无改动，PHP 补齐客服主体的对账接口。
+- **JS 客户端 SDK** `@guokit/im`（`js/`，0.12.0 起）：浏览器、uni-app（微信小程序 / H5 / App）、微信原生小程序共用，能力与 Flutter SDK 对齐，本文 §6、§7 的规则都已实现；只有内存缓存。先从 GitHub Release 分发，装法、小程序与浏览器要配的项见 `js/README.md`。
 - **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
-- 两者先以 git 依赖分发，安装方式见仓库 README。
+- Flutter 与 PHP 先以 git 依赖分发，安装方式见仓库 README。
 
 - **OpenAPI 3.1 规范**：`spec/openapi.yaml`，覆盖本文的服务端与客户端接口，可直接导入 Postman、Apifox 等工具生成请求集合或代码。
 - **给 AI 编码助手的说明**：`llms.txt`（索引）与 `llms-full.txt`（完整内容），可喂给 AI 助手作为接入上下文。

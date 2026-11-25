@@ -1,7 +1,8 @@
-# 客户端参考（App / Web）
+# 客户端参考（App / Web / 小程序）
 
 > **Flutter 首选 SDK**：[flutter/README.md](../../../flutter/README.md)（`guokit_im`），下面这些状态处理它都已包好。
-> 本页的手写片段给暂时没有 SDK 的平台（Web TS 等）参考。
+> **浏览器、uni-app、微信小程序首选 SDK**：[js/README.md](../../../js/README.md)（`@guokit/im`），同上。
+> 本页的手写片段给暂时没有 SDK 的平台（原生 iOS / Android 等）参考。
 
 HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <用户令牌>`。
 长连接 `wss://<IM 域名>/api/im/v1/connect/websocket`，Centrifuge 协议，连接时把用户令牌作为 SDK 的 `token`。
@@ -130,6 +131,8 @@ Future<void> pullAfter(int convId, int afterSeq) async {
 HTTP 判定：`r['code'] == 0` 才是成功（数字）；401 时换令牌后重试一次。
 
 ## 5. Web（npm 包 `centrifuge`，默认 JSON 协议，publication 的 data 已是对象）
+
+能用 `@guokit/im` 就不要手写这一段。小程序没有浏览器的 `WebSocket`，要自己包 `connectSocket`，且 `onclose` 必须带非空 `reason`，否则 3500 / 3503 会变成无限重连。
 
 Web 跨域接入前，在 IM 后台「IM 设置 → 允许的 Origin」加上你的页面源（`scheme://host[:port]`），否则握手被拒；原生 App 不带 Origin，不受影响。
 

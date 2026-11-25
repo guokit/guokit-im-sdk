@@ -1,6 +1,6 @@
 ---
 name: guokit-im
-description: 接入 guokit IM（果壳软件即时通讯）时使用：写接入方后端的用户导入、签令牌、封禁、黑名单同步、代发消息、回调验签代码，或写 App / Web 客户端的长连接、断线对账、消息去重、发送重试、图片语音文件视频收发、未读与已读代码。用户提到 guokit IM、guokit-im-sdk、/api/im/v1、X-Api-Key 为 imk_ 开头、Centrifuge 收 IM 推送、IM 回调 X-Im-Signature 时触发。
+description: 接入 guokit IM（果壳软件即时通讯）时使用：写接入方后端的用户导入、签令牌、封禁、黑名单同步、代发消息、回调验签代码，或写 App / Web / uni-app / 微信小程序客户端的长连接、断线对账、消息去重、发送重试、图片语音文件视频收发、未读与已读代码。用户提到 guokit IM、guokit-im-sdk、/api/im/v1、X-Api-Key 为 imk_ 开头、Centrifuge 收 IM 推送、IM 回调 X-Im-Signature 时触发。
 ---
 
 # guokit IM 接入
@@ -16,8 +16,9 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 ## 先看有没有 SDK
 
 - **Flutter 客户端**：用 `guokit_im`（本仓库 `flutter/`），令牌续期、断线对账、本地缓存、发送重试与去重、附件上传与链接重拉、撤回与已读同步都已包好，下面客户端那半不用自己写。
+- **浏览器、uni-app、微信小程序**：用 `@guokit/im`（本仓库 `js/`，从 GitHub Release 取），能力同上；只有内存缓存。uni-app 传 `platform: uniPlatform(uni)`，微信原生小程序传 `uniPlatform(wx)`，浏览器不传。装法、小程序合法域名、Origin 白名单见 `js/README.md`。
 - **PHP 后端**：用 `guokit/im`（本仓库根 `composer.json`，代码在 `php/`），含回调验签。
-- 其他语言暂无 SDK，照本 skill 与 references 直接调接口。
+- 其他服务端语言与原生 iOS / Android 暂无 SDK，照本 skill 与 references 直接调接口。
 
 ## 接入清单
 
@@ -29,7 +30,7 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送；message_recalled 用来撤掉已发的推送、更新归档（可能比 after_send 先到，按 `message_id` 判断）。站点接了微信渠道、要让坐席认出微信用户是哪个会员的，再实现 `resolve_user`（同步，3 秒内回）。
 
 客户端：
-1. 拿到令牌后连 `wss://<IM 域名>/api/im/v1/connect/websocket`（Centrifuge 协议，用官方 SDK：Flutter `centrifuge`、Web `centrifuge`）。
+1. 拿到令牌后连 `wss://<IM 域名>/api/im/v1/connect/websocket`（Centrifuge 协议，不用本仓 SDK 时用官方 SDK：Flutter `centrifuge`、Web `centrifuge`）。
 2. 每次 connected（首连与重连）都做一次对账：拉会话列表，落后的会话按 `after_seq` 补拉。
 3. 推送从服务端订阅的 publication 事件收：`message` / `read` / `read_all` / `conversation_changed` / `message_recalled` / `peer_read` / `typing`，不认识的忽略。
 4. 发消息、标已读、上传全走 HTTP。

@@ -1,6 +1,14 @@
 # CHANGELOG
 
-两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
+三个 SDK（Flutter `guokit_im`、PHP `guokit/im`、JS `@guokit/im`）共用仓库版本号。
+
+## v0.12.0
+
+新增 JS 客户端 SDK。需要 IM 服务端 v1.17.0（文件与视频 v1.19.0，客服主体 v1.20.0），服务端不用改。
+
+- **JS**：新增 `@guokit/im`，浏览器、uni-app（微信小程序 / H5 / App）、微信原生小程序共用一套内核，能力对齐 Flutter SDK。先从 GitHub Release 分发：npm 包 tgz、给 uni-app Vue3 的 ESM 单文件、给浏览器与微信原生小程序的单文件。只有内存缓存，没有 UI 组件
+- **Flutter、PHP**：代码不变
+- 接入文档 §6、§11 补 JS 与小程序；Skill、`llms.txt` 同步
 
 ## v0.11.0 — 2026-11-25
 

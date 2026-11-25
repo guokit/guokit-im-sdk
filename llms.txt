@@ -4,6 +4,12 @@
 
 写对接代码前请先读 Agent Skill 的易错点清单，再按需查接口文档与 OpenAPI 规范。
 
+## SDK
+
+- [JS 客户端 SDK](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/js/README.md)：`@guokit/im`，浏览器、uni-app、微信小程序
+- [Flutter 客户端 SDK](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/flutter/README.md)：`guokit_im`
+- [PHP 服务端 SDK](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/php/README.md)：`guokit/im`
+
 ## 文档
 
 - [接入文档](https://raw.githubusercontent.com/guokit/guokit-im-sdk/main/docs/IM接入文档.md)：接入步骤、通用约定、全部接口、长连接、同步、回调、限制、客服

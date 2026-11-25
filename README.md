@@ -7,6 +7,7 @@ guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库�
 | 内容 | 位置 |
 |---|---|
 | Flutter 客户端 SDK `guokit_im`（iOS / Android 本地缓存，Web 内存缓存） | [flutter/](flutter/README.md) |
+| JS 客户端 SDK `@guokit/im`（浏览器、uni-app、微信小程序） | [js/](js/README.md) |
 | PHP 服务端 SDK `guokit/im`（PHP ≥ 8.0） | [php/](php/README.md) |
 | 接入文档（人读） | [docs/IM接入文档.md](docs/IM接入文档.md) |
 | OpenAPI 3.1 规范（可导入 Postman / Apifox） | [spec/openapi.yaml](spec/openapi.yaml) |
@@ -14,19 +15,19 @@ guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库�
 
 ## SDK
 
-两个 SDK 共用仓库版本号，当前 `v0.11.0`（变更见 [CHANGELOG.md](CHANGELOG.md)），先以 git 依赖分发（接口稳定后再发 pub.dev / Packagist）：
+三个 SDK 共用仓库版本号，当前 `v0.12.0`（变更见 [CHANGELOG.md](CHANGELOG.md)）。Flutter 与 PHP 先以 git 依赖分发，JS 先从 [Releases](https://github.com/guokit/guokit-im-sdk/releases) 取（接口稳定后再发 pub.dev / Packagist / npm）：
 
 ```yaml
 # Flutter：pubspec.yaml
 dependencies:
   guokit_im:
-    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.11.0 }
+    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.12.0 }
 ```
 
 ```json
 // PHP：composer.json
 "repositories": [{ "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }],
-"require": { "guokit/im": "^0.11" }
+"require": { "guokit/im": "^0.12" }
 ```
 
 ```php
@@ -41,7 +42,14 @@ await im.login('u1001');
 await im.sendText('u1002', '你好');
 ```
 
-其他语言（Go / Node / Java / Web TS）的 SDK 还在路上，可先按下文或 [Agent Skill](skills/guokit-im/SKILL.md) 的参考片段直接调接口。
+```ts
+// 浏览器；uni-app 加 platform: uniPlatform(uni)，微信原生小程序加 platform: uniPlatform(wx)
+const im = new GuokitIm({ baseUrl: 'https://im.example.com', tokenProvider: fetchImTokenFromYourBackend })
+await im.login('u1001')
+await im.sendText('u1002', '你好')
+```
+
+其他服务端语言（Go / Node / Java）的 SDK 还在路上，可先按下文或 [Agent Skill](skills/guokit-im/SKILL.md) 的参考片段直接调接口。
 
 ## 五分钟上手（不用 SDK 时）
 
