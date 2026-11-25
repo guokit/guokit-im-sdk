@@ -1,0 +1,9 @@
+{
+  "name": "guokit IM 示例",
+  "appid": "",
+  "versionName": "0.1.0",
+  "versionCode": "1",
+  "vueVersion": "3",
+  "h5": { "router": { "mode": "hash", "base": "./" }, "devServer": { "port": 8902 } },
+  "mp-weixin": { "appid": "", "setting": { "urlCheck": false }, "usingComponents": true }
+}

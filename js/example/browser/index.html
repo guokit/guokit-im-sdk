@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>guokit IM 浏览器示例</title>
+<style>
+  body { font: 14px/1.6 system-ui; max-width: 640px; margin: 16px auto; padding: 0 16px; }
+  #list { height: 320px; overflow: auto; border: 1px solid #ddd; padding: 8px; }
+  .self { text-align: right; }
+  img { max-width: 200px; max-height: 200px; }
+  #log { color: #666; font-size: 12px; white-space: pre-wrap; }
+</style>
+<!-- 先在 js/ 下 npm run build。真实项目里令牌由自家后端签发，这里从地址栏 hash 取：
+     index.html#baseUrl=https://im.example.com&user=u1001&peer=u1002&token=… -->
+<p id="status"></p>
+<div id="list"></div>
+<p>
+  <input id="text" placeholder="说点什么，回车发送" style="width: 60%" />
+  <input id="file" type="file" />
+</p>
+<div id="log"></div>
+<script src="../../dist/guokit-im.min.js"></script>
+<script>
+  const q = new URLSearchParams(location.hash.slice(1))
+  const [userId, peer] = [q.get('user'), q.get('peer')]
+  const $ = id => document.getElementById(id)
+  const log = (...a) => ($('log').textContent += a.join(' ') + '\n')
+
+  const im = (window.im = new GuokitIm.GuokitIm({
+    baseUrl: q.get('baseUrl'),
+    tokenProvider: async () => ({ token: q.get('token'), expires_at: '2099-01-01 00:00:00' }),
+  }))
+  const status = () => ($('status').textContent = `${im.connectionState} · 未读 ${im.totalUnread}`)
+
+  im.on('connection', status)
+  im.on('totalUnread', status)
+  im.on('conversations', render)
+  im.on('messageUpdated', render)
+  im.on('newMessage', async m => {
+    await render()
+    if (m.from === peer) im.markRead(m.conversationId)
+  })
+  im.on('sendProgress', p => log('上传', p.sent, '/', p.total))
+  im.on('kickedOut', () => (log('被踢下线'), im.logout()))
+
+  let loading = false
+  async function render() {
+    if (loading) return
+    loading = true
+    try {
+      const conv = im.conversationWith(peer)
+      const list = conv ? await im.messages(conv.id) : im.pendingTo(peer)
+      const rows = []
+      for (const m of list) {
+        const div = document.createElement('div')
+        if (m.isSelf) div.className = 'self'
+        if (m.type === 'image') {
+          const img = document.createElement('img')
+          img.src = (await im.imageUrl(m)) || ''
+          div.append(img)
+        } else if (m.type === 'file') {
+          const a = document.createElement('a')
+          a.textContent = m.fileName
+          a.target = '_blank'
+          a.href = (await im.fileUrl(m)) || '#'
+          div.append(a)
+        } else {
+          div.textContent = m.isRecalled ? '[已撤回]' : m.type === 'text' ? m.content.text : `[${m.type}]`
+        }
+        if (m.status !== 'sent') div.append(` (${m.status} ${m.errorCode || ''})`)
+        rows.push(div)
+      }
+      $('list').replaceChildren(...rows)
+      $('list').scrollTop = 1e9
+    } catch (e) {
+      log(e.message)
+    } finally {
+      loading = false
+    }
+  }
+
+  $('text').onkeydown = e => {
+    if (e.key !== 'Enter' || !e.target.value) return
+    im.sendText(peer, e.target.value)
+    e.target.value = ''
+  }
+  $('file').onchange = e => {
+    const f = e.target.files[0]
+    if (f) f.type.startsWith('image/') ? im.sendImage(peer, f) : im.sendFile(peer, f)
+    e.target.value = ''
+  }
+
+  im.login(userId).then(() => setTimeout(() => {
+    const conv = im.conversationWith(peer)
+    if (conv) im.markRead(conv.id)
+  }, 800))
+</script>
+</html>

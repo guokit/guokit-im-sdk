@@ -1,5 +1,5 @@
 .DS_Store
-node_modules/
+node_modules
 /vendor/
 composer.lock
 .phpunit.result.cache
@@ -14,3 +14,6 @@ js/dist/
 js/LICENSE
 *.tgz
 .task-state.md
+js/example/uni/libs/
+js/example/uni/dist/
+js/example/uni/package-lock.json
