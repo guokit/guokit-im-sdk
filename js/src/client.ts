@@ -579,7 +579,8 @@ export class GuokitIm {
     }
     const away = s.hiddenAt === null ? 0 : Date.now() - s.hiddenAt
     s.hiddenAt = null
-    this.resume(s, this.platform.suspends && away >= AWAY_MS)
+    // 已在重连就不再丢一次：刚开始连的那条在安卓微信上关不掉，会白占一条直到服务端 15 秒后清掉
+    this.resume(s, this.platform.suspends && away >= AWAY_MS && this.state === 'connected')
   }
 
   private onNetwork(s: Session, c: NetworkChange): void {

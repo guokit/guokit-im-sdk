@@ -142,9 +142,13 @@ test('前后台：离开 10 秒以上丢连接重连，不足只补对账；浏�
   expect(rts[0].events).toEqual(['online', 'offline', 'online'])
   p.network[0]({ online: true, switched: true })
   expect(rts[0].events.slice(3)).toEqual(['offline', 'online'])
-  p.suspends = false
+  rts[0].hooks.onConnecting() // 回来时已在重连：不再丢一次
   leave(60_000)
   expect(rts[0].events.slice(5)).toEqual(['online'])
+  rts[0].hooks.onConnected()
+  p.suspends = false
+  leave(60_000)
+  expect(rts[0].events.slice(6)).toEqual(['online'])
 })
 
 test('取令牌失败报 disconnected，恢复网络时自动再连', async () => {
