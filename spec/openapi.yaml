@@ -1602,7 +1602,7 @@ components:
         attachment_id: { type: integer, format: int64 }
         duration: { type: integer, minimum: 1, maximum: 60, description: 秒 }
         size: { type: integer, format: int64, description: 字节 }
-        mime: { type: string, enum: [audio/mp4, audio/mpeg] }
+        mime: { type: string, enum: [audio/mp4, audio/mpeg, audio/wave], description: audio/wave 只出现在微信用户发来的语音里（8kHz 单声道） }
         url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
 
     RecalledContent:

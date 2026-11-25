@@ -312,7 +312,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 
 图片两种形式**二选一**，同时传 `attachment_id` 与 `url` 会被拒。
 收到的上传图消息 content 为 `{"attachment_id", "width", "height", "url"}`：`url` 是**每次读取时现签**的临时链接（约 24 小时有效），不要长期保存；本地按 `attachment_id` 缓存图片，链接过期就重新拉一次该消息拿新链接。外链图原样返回 `{"url", "width", "height"}`。
-收到的语音消息 content 为 `{"attachment_id", "duration", "size", "mime", "url"}`：`size`（字节）与 `mime`（`audio/mp4` / `audio/mpeg`）由服务端给，`url` 规则同上传图。旧版客户端不认识 `voice`，请先让用户升级再开放发语音。
+收到的语音消息 content 为 `{"attachment_id", "duration", "size", "mime", "url"}`：`size`（字节）与 `mime`（`audio/mp4` / `audio/mpeg`；微信用户发来的语音是 `audio/wave`，8kHz 单声道，见 §10.10）由服务端给，`url` 规则同上传图。旧版客户端不认识 `voice`，请先让用户升级再开放发语音。
 
 会话预览文字：text 取前 50 字，image 为 `[图片]`，voice 为 `[语音]`，location 为 `[位置]`，custom 取 `desc`，已撤回的为 `[消息已撤回]`。
 
@@ -1124,6 +1124,8 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 ### 10.10 微信渠道：回调地址已被占用时的转发
 
 站点可以接公众号与小程序的客服消息：用户在微信里发的话进同一条 `@cs` 客服会话，坐席与机器人的回复发回微信。这些用户的来源是 `wechat`（§8.5），不在你的用户体系里。
+
+用户发的语音是微信的 AMR 格式，站点存成 WAV，以 `voice` 消息（`mime` 为 `audio/wave`）进会话与 after_send。微信不把文件（PDF 等）推给公众号，收不到。
 
 配置在站点后台「微信渠道」完成，微信后台的「消息推送」填站点给的回调地址即可，**接入方不用写代码**。只有一种情况例外：公众号 / 小程序的消息推送地址已经指向你的系统。这时由你的系统转发：
 
@@ -2754,7 +2756,7 @@ components:
         attachment_id: { type: integer, format: int64 }
         duration: { type: integer, minimum: 1, maximum: 60, description: 秒 }
         size: { type: integer, format: int64, description: 字节 }
-        mime: { type: string, enum: [audio/mp4, audio/mpeg] }
+        mime: { type: string, enum: [audio/mp4, audio/mpeg, audio/wave], description: audio/wave 只出现在微信用户发来的语音里（8kHz 单声道） }
         url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
 
     RecalledContent:
