@@ -34,6 +34,7 @@ export class Store {
     for (const c of list) {
       this.convs.set(c.id, mergeConversation(this.convs.get(c.id), c))
       if (c.clearSeq > 0) this.purge(c.id, c.clearSeq)
+      this.startSynced(c.id)
     }
   }
 
@@ -121,6 +122,17 @@ export class Store {
     this.synced.set(id, s)
   }
 
+  /**
+   * 还没有起点、但已持有第一条可见消息（新开的会话、清空后来的第一条）：等于完整持有，设起点。
+   * 否则聊天页开着、没调过 messages() 的新会话，断线期间的消息不会补拉。
+   */
+  private startSynced(id: number): void {
+    const c = this.convs.get(id)
+    if (!c || this.syncedSeq(id) > 0) return
+    const first = c.clearSeq + 1
+    for (const m of this.msgs.values()) if (m.conversationId === id && m.seq === first) return this.setSyncedSeq(id, first)
+  }
+
   // ---------------- 消息 ----------------
 
   /** 先按 id、再按「发送者 + clientMsgId」匹配，都没有才插入。清空范围内的不入库，已有的本地版本一并删掉。 */
@@ -144,6 +156,7 @@ export class Store {
       if (conv) this.convs.set(id, bumpConversation(conv, merged, merged.seq))
       const synced = this.syncedSeq(id)
       if (synced > 0 && merged.seq === synced + 1) this.setSyncedSeq(id, synced)
+      this.startSynced(id)
     }
     return { message: merged, inserted }
   }

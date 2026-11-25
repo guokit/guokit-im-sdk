@@ -60,7 +60,7 @@ if (conv) {
 - `on()` 返回取消函数，事件在下一拍投递。不要在 `conversations` 事件里再调 `im.conversations()`，它会触发对账。
 - 消息、会话都是**普通对象**：时间是毫秒时间戳，没有值的是 `null`，可以直接 `setData` 或交给 Vue / React。每次变化给新对象。
 - `conversation.peer` 可能是 `null`（将来没有单一对方的会话），请判空；`type` 将来会增加取值，不认识的消息请兜底显示。
-- 会话列表用 `unread` / `totalUnread` 做角标；**没打开过的会话在离线期间来的消息只更新列表，不发 `newMessage`**。
+- 会话列表用 `unread` / `totalUnread` 做角标。**打开聊天页一定要调 `messages()`**：没调过的老会话，离线期间来的消息只更新列表，不发 `newMessage`。第一次和某人聊时会话还不存在，先显示 `pendingTo()`，等 `conversations` 事件里出现这个会话再调 `messages()`。
 
 ### 发附件
 
@@ -83,7 +83,7 @@ await im.sendVideo(to, file, { durationMs, width, height, cover })        // H.2
 
 `pendingTo` `markAllRead` `setPinned` `setMuted` `clearConversation` `deleteConversation` `recall` `sendTyping` `features` `block` `unblock` `blocks` `sendLocation` `sendCustom` `foreground` `logout` `dispose`；工具 `messageCard(m)`（业务卡片）、`csServiceId(userId)`。完整签名看类型声明。
 
-参数错误（`TypeError` / `RangeError`）与未登录**同步抛**；接口失败抛 `ImApiError`（`code` / `message` / `httpStatus` / `isTemporary`），`send*` 例外，不抛。
+接口失败 reject `ImApiError`（`code` / `message` / `httpStatus` / `isTemporary`）。`send*` `resend` 例外：发送失败不抛，看消息的 `status`；它们与 `recall` `rateCs` `leaveCs` 的参数错误（`TypeError` / `RangeError`）、未登录是**同步抛**，其余返回 Promise 的方法未登录时 reject。
 
 ## 微信小程序要配什么
 

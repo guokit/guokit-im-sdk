@@ -58,6 +58,34 @@ test('拉列表失败：不建占位会话，消息与事件照常，随后对�
   expect([news, store.conversation(1)!.unread]).toEqual([['m1'], 1])
 })
 
+test('会话列表翻到一半失败，下次对账接着翻完', async () => {
+  const pages: Record<string, object> = {
+    '': ok({ items: [convRaw({ max_seq: 1 })], next_cursor: 'p2' }),
+    p2: ok({ items: [convRaw({ conversation_id: 2, peer: { user_id: 'u3' } })], next_cursor: '' }),
+  }
+  let bad = true
+  p.routes['GET /conversations'] = r => {
+    const c = /cursor=(\w+)/.exec(r.url)?.[1] ?? ''
+    return c && bad ? fail('INTERNAL', 502) : (pages[c] as any)
+  }
+  await sync.reconcile()
+  bad = false
+  await sync.reconcile()
+  expect(store.conversations()).toHaveLength(2)
+})
+
+test('新会话首条由本设备发出，没调过 messages()：断线期间的消息照样补', async () => {
+  list = [convRaw({ max_seq: 1 })]
+  sync.ingest(1, [msgRaw(1, { from: 'u1' })], false)
+  await sync.ensureConversation(1)
+  sync.handlePush(push(2))
+  await sync.idle
+  list = [convRaw({ max_seq: 4 })]
+  server = [msgRaw(3), msgRaw(4)]
+  await sync.reconcile()
+  expect(news).toEqual(['m2', 'm3', 'm4'])
+})
+
 test('跳号补拉中间段，按序发事件', async () => {
   store.upsertConversations([])
   sync.handlePush(push(1))

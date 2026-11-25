@@ -30,7 +30,8 @@ async function login() {
   })
   im.on('connection', s => { state.value = s; log('连接', s) })
   im.on('totalUnread', n => total.value = n)
-  im.on('conversations', l => convs.value = l)
+  // 首条消息发成功后会话才出现，这时要把聊天页从「未确认消息」换成会话消息
+  im.on('conversations', l => { const had = !!conv.value; convs.value = l; if (!had && conv.value) open() })
   im.on('newMessage', m => { log('新消息', m.type, m.seq); refresh(); if (m.conversationId === conv.value?.id) im.markRead(m.conversationId) })
   im.on('messageUpdated', m => { if (m.status !== 'sent') log(m.type, m.status, m.errorCode || '', m.errorMessage || ''); refresh() })
   im.on('kickedOut', () => { log('被踢下线'); logout() })
@@ -112,7 +113,7 @@ function press(m) {
     <template v-else>
       <view class="bar">{{ state }} · 未读 {{ total }} · 对方 {{ peer }}<text v-if="typing"> 正在输入…</text><text class="link" @click="logout">登出</text></view>
       <scroll-view scroll-x class="convs">
-        <text v-for="c in convs" :key="c.id" class="conv" @click="open(c.peer.userId)">{{ c.peer ? c.peer.nickname || c.peer.userId : c.type }}({{ c.unread }})</text>
+        <text v-for="c in convs" :key="c.id" class="conv" @click="c.peer && open(c.peer.userId)">{{ c.peer ? c.peer.nickname || c.peer.userId : c.type }}({{ c.unread }})</text>
       </scroll-view>
       <scroll-view scroll-y class="list" :scroll-into-view="bottom">
         <view v-for="m in list" :key="m.clientMsgId" :class="['row', m.isSelf ? 'self' : '']" @longpress="press(m)">

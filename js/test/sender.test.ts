@@ -120,7 +120,10 @@ test('链接超过 20 小时重拉；没有封面的视频不重拉', async () =
   expect(await sender.mediaUrl(m, 'image')).toBe('old')
   store.upsertMessage({ ...m, urlFetchedAt: 1 })
   p.routes['GET /conversations/1/messages'] = () => ok({ items: [raw('new')], has_more: false })
+  updated = []
   expect(await sender.mediaUrl(m, 'image')).toBe('new')
+  store.upsertMessage({ ...m, content: { attachment_id: 7, url: 'new' }, urlFetchedAt: 1 })
+  expect([await sender.mediaUrl(m, 'image'), updated.length]).toEqual(['new', 1]) // 地址没变不再发事件
   expect(await sender.mediaUrl({ ...m, id: null, type: 'video', content: { attachment_id: 7, cover_attachment_id: 0, cover_url: '' } }, 'video', 'cover_url')).toBeNull()
 })
 

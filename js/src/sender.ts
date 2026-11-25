@@ -104,8 +104,10 @@ export class Sender {
       this.sync.ingest(m.conversationId, r.items, false)
       const latest = m.id === null ? null : this.store.messageById(m.id)
       if (latest) {
-        this.hooks.onUpdated(latest)
-        return latest.content[key] || null
+        const fresh: string | null = latest.content[key] || null
+        // 地址没变不发事件：接入方常在 messageUpdated 里刷新并再取地址，会循环请求
+        if (fresh !== url) this.hooks.onUpdated(latest)
+        return fresh
       }
     } catch (e) {
       if (isKickedOut(e)) this.hooks.onKickedOut()

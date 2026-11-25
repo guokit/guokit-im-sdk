@@ -22,7 +22,7 @@ export interface ImConfig {
 }
 
 export interface ImEvents {
-  /** 新入库的消息：别人发来的，以及本人在其他设备发的。没打开过的会话在离线期间来的消息只更新列表，不走这里。 */
+  /** 新入库的消息：别人发来的，以及本人在其他设备发的。没打开过（没调过 messages()）的老会话在离线期间来的消息只更新列表，不走这里。 */
   newMessage: ImMessage
   /** 本地消息变化：新建「发送中」、到终态、附件换新链接、变成已撤回。 */
   messageUpdated: ImMessage
@@ -239,7 +239,9 @@ export class GuokitIm {
         fetched = latest = true
         const { items } = await api.messages(conversationId, { limit })
         sync.ingest(conversationId, items, false)
-        if (items.length && store.syncedSeq(conversationId) === 0) store.setSyncedSeq(conversationId, items[items.length - 1].seq)
+        if (store.syncedSeq(conversationId) > 0) return
+        // 清空过、之后没有新消息的会话是空页：起点就是清空到的位置
+        store.setSyncedSeq(conversationId, items.length ? items[items.length - 1].seq : firstSeq - 1)
       }
       const synced = store.syncedSeq(conversationId)
       if (synced === 0) await fetchLatest()

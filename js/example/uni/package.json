@@ -2,7 +2,7 @@
   "name": "guokit-im-uni-example",
   "private": true,
   "scripts": {
-    "sdk": "cd ../.. && npm run build && cp dist/guokit-im.esm.js example/uni/libs/",
+    "sdk": "cd ../.. && npm run build && mkdir -p example/uni/libs && cp dist/guokit-im.esm.js example/uni/libs/",
     "dev:h5": "UNI_INPUT_DIR=. uni -p h5",
     "build:h5": "UNI_INPUT_DIR=. uni build -p h5",
     "dev:mp-weixin": "UNI_INPUT_DIR=. uni -p mp-weixin",

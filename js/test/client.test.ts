@@ -158,6 +158,20 @@ test('取令牌失败报 disconnected，恢复网络时自动再连', async () =
   expect(im.connectionState).toBe('connected')
 })
 
+test('清空过的会话打开后是空页：断线期间的消息照样补', async () => {
+  p.routes['GET /conversations'] = () => ok({ items: [convRaw({ max_seq: 5, read_seq: 5, clear_seq: 5 })], next_cursor: '' })
+  await im.login('u1')
+  await flush()
+  const raw = (seq: number) => ({ id: seq, conversation_id: 1, seq, from: 'u2', type: 'text', content: { text: 'x' }, client_msg_id: 'c' + seq, created_at: at })
+  p.routes['GET /conversations/1/messages'] = () => ok({ items: [], has_more: false })
+  expect(await im.messages(1)).toEqual([])
+  p.routes['GET /conversations'] = () => ok({ items: [convRaw({ max_seq: 7, read_seq: 5, clear_seq: 5 })], next_cursor: '' })
+  p.routes['GET /conversations/1/messages'] = () => ok({ items: [raw(6), raw(7)], has_more: false })
+  rts[0].hooks.onConnected()
+  await flush()
+  expect(of('newMessage').map(m => m.seq)).toEqual([6, 7])
+})
+
 test('正在输入：显示后到期收起', async () => {
   await im.login('u1')
   rts[0].hooks.onPublication({ event: 'typing', conversation_id: 1, from: 'u2', expires_in: 0.01 })

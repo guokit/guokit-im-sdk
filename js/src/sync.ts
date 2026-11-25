@@ -24,6 +24,8 @@ export class Sync {
   private closed = false
   private tail: Promise<void> = Promise.resolve()
   private pendingReconcile: Promise<void> | null = null
+  /** 本次登录已完整翻过一遍会话列表。没翻完过就不能「一页没推进就停」，否则后面的页再也翻不到。 */
+  private listed = false
   /** 本次登录删除过的会话 → 当时的 clearSeq。挡住删除前发出、删除后才返回的拉消息结果。 */
   private deletedSeq = new Map<number, number>()
 
@@ -89,15 +91,17 @@ export class Sync {
   }
 
   private async doReconcile(): Promise<void> {
-    // 1. 翻会话列表；一整页的 maxSeq 都不超过本地记录时停止
+    // 1. 翻会话列表；翻完过一遍之后，一整页的 maxSeq 都不超过本地记录就停
     let cursor: string | null = null
     do {
       const page: Awaited<ReturnType<ImApi['conversations']>> = await this.api.conversations(cursor, 50)
       const advanced = page.items.some(c => c.maxSeq > (this.store.conversation(c.id)?.maxSeq ?? -1))
       this.store.upsertConversations(page.items)
-      if (!advanced) break
+      if (this.listed && !advanced) break
       cursor = page.nextCursor
     } while (cursor)
+    this.listed = true
+    this.hooks.onChanged() // 冷启动没有本地缓存，列表先出来，不等后面的增量
 
     // 2. 离线期间别的设备改的会话设置。「已删除」只能从这里知道。旧服务端没有接口，失败不影响后面
     await this.tolerate(() => this.pullChanges())

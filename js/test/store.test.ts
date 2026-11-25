@@ -87,6 +87,17 @@ test('syncedSeq 沿连续消息推进，断档停住', () => {
   expect(s.syncedSeq(1)).toBe(3)
 })
 
+test('新会话从第一条起就算完整持有；老会话与断档不算', () => {
+  s.upsertMessage(msg(1)) // 消息先到、会话后到
+  s.upsertConversations([conv({ max_seq: 1 })])
+  expect(s.syncedSeq(1)).toBe(1)
+  const t = new Store()
+  t.upsertConversations([conv({ max_seq: 5 }), conv({ conversation_id: 2, peer: { user_id: 'u3' }, max_seq: 3, clear_seq: 3 })])
+  t.upsertMessage(msg(6))
+  t.upsertMessage(msg(4, { id: 900, conversation_id: 2, client_msg_id: 'z' }))
+  expect([t.syncedSeq(1), t.syncedSeq(2)]).toEqual([0, 4])
+})
+
 test('排序：置顶在前按置顶时间，其余按最后消息时间', () => {
   s.upsertConversations([
     conv({ conversation_id: 1 }),
