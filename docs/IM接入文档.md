@@ -1245,7 +1245,7 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 
 公开仓库 <https://github.com/guokit/guokit-im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
 
-- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。0.9.0 起提供文件与视频 `sendFile` / `sendVideo`（按路径发时边读边传）、`fileUrl` / `videoUrl` / `videoCoverUrl` 与上传进度 `onSendProgress`（§5.1、§5.6，需要服务端 v1.19.0）；选文件、压缩转码、截封面、播放、下载由 App 自己做。
+- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。0.9.0 起提供文件与视频 `sendFile` / `sendVideo`（按路径发时边读边传）、`fileUrl` / `videoUrl` / `videoCoverUrl` 与上传进度 `onSendProgress`（§5.1、§5.6，需要服务端 v1.19.0）；选文件、压缩转码、截封面、播放、下载由 App 自己做。0.10.0 起提供客服主体 `csUserId` / `ImConversation.serviceId` 与 `csState(serviceId: …)`（§10.11，需要服务端 v1.20.0）。
 - **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
 - 两者先以 git 依赖分发，安装方式见仓库 README。
 
