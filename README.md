@@ -2,7 +2,7 @@
 
 guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库是它的**公开接入资料**：SDK、接口文档、OpenAPI 规范、给 AI 编码助手用的接入说明（`llms.txt` 与 Agent Skill）。
 
-需要 IM 服务端 **≥ v1.8.0**。其中机器人与网页客服需 ≥ v1.12.0，工单进展与留言需 ≥ v1.13.0，微信渠道需 ≥ v1.14.0（关注与菜单自动回复 ≥ v1.15.0，识别微信用户是哪个会员 `resolve_user` ≥ v1.16.0），撤回、语音、对方已读、正在输入需 ≥ v1.17.0，文件与视频需 ≥ v1.19.0，客服主体（每家门店一个客服）需 ≥ v1.20.0。
+需要 IM 服务端 **≥ v1.8.0**。其中机器人与网页客服需 ≥ v1.12.0，工单进展与留言需 ≥ v1.13.0，微信渠道需 ≥ v1.14.0（关注与菜单自动回复 ≥ v1.15.0，识别微信用户是哪个会员 `resolve_user` ≥ v1.16.0），撤回、语音、对方已读、正在输入需 ≥ v1.17.0，文件与视频需 ≥ v1.19.0，客服主体（每家门店一个客服）需 ≥ v1.20.0，其中同事接管、对账接口、坐席消息审核、接待变化回调需 ≥ v1.21.0。
 
 | 内容 | 位置 |
 |---|---|
@@ -14,19 +14,19 @@ guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库�
 
 ## SDK
 
-两个 SDK 共用仓库版本号，当前 `v0.10.0`（变更见 [CHANGELOG.md](CHANGELOG.md)），先以 git 依赖分发（接口稳定后再发 pub.dev / Packagist）：
+两个 SDK 共用仓库版本号，当前 `v0.11.0`（变更见 [CHANGELOG.md](CHANGELOG.md)），先以 git 依赖分发（接口稳定后再发 pub.dev / Packagist）：
 
 ```yaml
 # Flutter：pubspec.yaml
 dependencies:
   guokit_im:
-    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.10.0 }
+    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.11.0 }
 ```
 
 ```json
 // PHP：composer.json
 "repositories": [{ "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }],
-"require": { "guokit/im": "^0.10" }
+"require": { "guokit/im": "^0.11" }
 ```
 
 ```php
