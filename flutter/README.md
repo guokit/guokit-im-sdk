@@ -1,11 +1,11 @@
 # guokit_im · Flutter 客户端 SDK
 
-guokit IM 的 Flutter 客户端：替你处理令牌续期、断线对账补拉、本地消息缓存、发送重试与去重、图片与语音的上传、链接过期重拉，撤回与已读同步。
+guokit IM 的 Flutter 客户端：替你处理令牌续期、断线对账补拉、本地消息缓存、发送重试与去重、图片、语音、文件与视频的上传、链接过期重拉，撤回与已读同步。
 对外只暴露 Dart 自带的 `Stream`，不绑定任何状态管理库。
 
 - iOS / Android：本地缓存用 SQLite（每个用户一个库文件）。
 - Web：只做内存缓存，能收发，刷新页面后从服务端重拉。
-- 需要 IM 服务端 ≥ v1.8.0；撤回、语音、对方已读、正在输入需要 ≥ v1.17.0。
+- 需要 IM 服务端 ≥ v1.8.0；撤回、语音、对方已读、正在输入需要 ≥ v1.17.0；文件与视频需要 ≥ v1.19.0。
 
 ## 安装
 
@@ -15,7 +15,7 @@ dependencies:
     git:
       url: https://github.com/guokit/guokit-im-sdk.git
       path: flutter
-      ref: v0.8.0
+      ref: v0.9.0
 ```
 
 ## 上手
@@ -56,7 +56,8 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `login(userId)` / `logout({clearCache})` | 打开本地库、取令牌、连接、对账 / 断开并关库。取令牌失败不抛异常，只报 disconnected；已登录同一用户时再调一次即重连 |
 | `currentUserId` / `totalUnread` / `connectionState` | 同步取值 |
 | `onNewMessage` | 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的、已撤回的不走这里 |
-| `onMessageUpdated` | 本设备消息状态变化（发送中 → 成功 / 失败 / 被拒收）、图片与语音换新链接、消息变成已撤回（不分本人与对方） |
+| `onMessageUpdated` | 本设备消息状态变化（发送中 → 成功 / 失败 / 被拒收）、附件换新链接、消息变成已撤回（不分本人与对方） |
+| `onSendProgress` | 图片、语音、文件、视频的上传进度（`clientMsgId`、`sent`、`total`），Web 上会直接跳到 100% |
 | `onTyping` | 对方「正在输入」的变化，`active` 为 false 时收起 |
 | `onConversationsChanged` / `onTotalUnreadChanged` | 会话快照（置顶在前，其余按最后消息时间倒序）/ 总未读（不计免打扰会话，登录后先推一次本地值） |
 | `onConnectionChanged` / `onKickedOut` | 连接状态 / 被封禁或踢下线 |
@@ -66,8 +67,10 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `pendingTo(peerId)` | 发给对方的未确认消息（发送中 / 失败 / 被拒收），还没有会话时聊天页用它显示，失败的可重发 |
 | `sendText / sendImage(路径) / sendImageBytes(字节) / sendLocation / sendCustom` | 立即经 `onMessageUpdated` 发出「发送中」；Future 在终态完成，**不抛异常** |
 | `sendVoice(to, 路径, 时长) / sendVoiceBytes(to, 字节, 时长)` | 发语音，m4a（AAC）或 mp3，60 秒、2MB 以内，见下方常见问题 |
+| `sendFile(to, 路径, {name}) / sendFileBytes(to, 字节, {name})` | 发文件，按路径发时边读边传，见下方常见问题 |
+| `sendVideo(to, 路径, {duration, width, height, coverBytes}) / sendVideoBytes(…)` | 发视频，mp4 或 mov，1 小时以内，封面可选，见下方常见问题 |
 | `recall(msg)` | 撤回自己发的消息，失败会抛，见下方常见问题 |
-| `features()` | 站点开关：`recallMinutes` 撤回时限（0 = 没开启）、`readReceipt` 是否显示对方已读 |
+| `features()` | 站点开关：`recallMinutes` 撤回时限（0 = 没开启）、`readReceipt` 是否显示对方已读、`fileMaxMb` / `videoMaxMb` 能发多大的文件与视频（0 = 不能发） |
 | `sendTyping(convId)` | 告诉对方自己正在输入，SDK 3 秒节流，失败静默 |
 | `resend(failed)` | 只能重发 `failed` 的消息，沿用原 `client_msg_id`，服务端幂等不会重复 |
 | `markRead(convId)` / `markAllRead()` | 标已读 / 一键清全部未读 |
@@ -76,7 +79,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `block / unblock / blocks` | 黑名单 |
 | `csState()` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
 | `leaveCs({name, phone, email})` | 没有客服在线时留联系方式，返回留言单号，见下方常见问题 |
-| `imageUrl(msg)` / `voiceUrl(msg)` | 返回可用的图片 / 语音地址；上传的链接约 24 小时过期，SDK 会在快过期时重拉 |
+| `imageUrl(msg)` / `voiceUrl(msg)` / `fileUrl(msg)` / `videoUrl(msg)` / `videoCoverUrl(msg)` | 返回可用的图片 / 语音 / 文件下载 / 视频 / 视频封面地址；上传的链接约 24 小时过期，SDK 会在快过期时重拉 |
 
 **发送结果**（`ImMessage.status` 与 `errorCode`）：
 
@@ -86,7 +89,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `rejected` | `IM_BLOCKED`（对方拉黑了你）、`IM_MESSAGE_REJECTED`（审核拒绝） | 提示「被对方拒收」，不要重发 |
 | `failed` | `NETWORK`、`IM_RATE_LIMITED`、服务端 5xx | 允许用户点「重发」 |
 | `failed` | `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`VALIDATION` | 按错误码提示，例如「对方还不能接收私信」 |
-| `failed` | `IMAGE_DECODE`、`FILE_READ`、`IMAGE_MISSING`、`VOICE_MISSING`、`KICKED_OUT`、`UNKNOWN` | SDK 自己的错误码，见 `lib/src/sender.dart` 文件头 |
+| `failed` | `IMAGE_DECODE`、`FILE_READ`、`IMAGE_MISSING`、`VOICE_MISSING`、`FILE_MISSING`、`VIDEO_MISSING`、`KICKED_OUT`、`UNKNOWN` | SDK 自己的错误码，见 `lib/src/sender.dart` 文件头 |
 
 ## 常见问题
 
@@ -127,11 +130,22 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 **撤回怎么做？**
 - 站点没开启时 `features().recallMinutes` 为 0，不要显示「撤回」；开启了，自己发的、在时限内的消息才显示。真正的判断在服务端，`recall(msg)` 抛 `ImApiException`（`IM_RECALL_NOT_ALLOWED`）时直接显示 `message`
 - 撤回后 `msg.isRecalled` 为 true、`msg.recalledBy` 为 `sender` / `agent`（客服坐席）/ `server`（你的后端），原文已不在，显示「消息已撤回」。对方撤回、离线期间的撤回都会经 `onMessageUpdated` 发出，未读数不变
-- SDK 会清空这条消息的 `localPath`，但**不删任何文件**（可能是用户相册里的原图）；录音临时文件、App 自己缓存的图片和语音，请在 `onMessageUpdated` 里清掉
+- SDK 会清空这条消息的 `localPath`，但**不删任何文件**（可能是用户相册里的原图）；录音临时文件、App 自己缓存的图片、语音、文件和视频，请在 `onMessageUpdated` 里清掉
 - **旧版 SDK 不认识撤回**，对方装的是旧版时仍能看到原文。等用户都升级了再让站点打开
 
 **语音怎么做？**
 录音和播放由 App 自己做，SDK 只管上传与收发。推荐 AAC-LC 单声道的 m4a；AMR、Opus、裸 AAC 服务端不收（浏览器录出来多为 Opus）。`msg.voiceDuration` 是时长，播放前调 `voiceUrl(msg)` 取地址。旧版 App 不认识语音，请先让用户升级。网页访客不能发语音。
+
+**文件和视频怎么做？**
+选文件、压缩转码、截封面、播放、下载都由 App 自己做，SDK 只管上传与收发，示例见 [example/](example/)。
+- 站点默认关闭。`features().fileMaxMb` / `videoMaxMb` 为 0 就不要显示入口；**发之前先按它判断大小**，超限的请求服务端不收完就断开，弱网下可能只看到 `NETWORK`
+- 文件只收 pdf、docx、xlsx、pptx、doc、xls、ppt、wps、et、dps、txt、csv、md、log、zip、rar，扩展名要和内容对得上，否则 `failed` + `VALIDATION`。名字用 `name` 传，缺省取路径里的文件名
+- 视频只收 mp4 与 mov，**发送前请转成 H.264 的 MP4**：服务端不转码，iPhone 默认拍的 HEVC 很多浏览器放不了。对方放不了时给下载链接。`duration`、`width`、`height` 必填，越界抛 `ArgumentError`
+- 封面是一张图片（`coverBytes`），SDK 先传封面再传视频。封面断网没传上去时整条 `failed`，重发时再传；服务端不收这张图就不带封面继续发；还没传上去进程就退出的，重发时不带封面
+- 传完之后发送失败的，重发不会再传一次。按路径发的不要在发送成功前删文件；上传最长等 5 分钟，超时只是不再等，重发会重新传
+- 进度听 `onSendProgress`，`sent == total` 只表示发完了，结果以消息状态为准
+- 显示用 `msg.fileName`、`msg.fileSize`、`msg.videoDuration`；下载前调 `fileUrl(msg)`，播放前调 `videoUrl(msg)`，封面 `videoCoverUrl(msg)`（没有封面为 null）
+- 旧版 App 不认识这两种消息，会话预览是空白，请先让用户升级再让站点打开
 
 **「已读」怎么显示？**
 `ImConversation.peerReadSeq` 不为 null 时，自己发的 `seq <= peerReadSeq` 的消息显示「已读」，其余「未读」；为 null（站点没开启、旧版服务端、客服会话）就都不显示。
@@ -139,8 +153,9 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 
 **Web 端要注意什么？**
 - 页面和 IM 不同源时，要在 IM 后台「IM 设置 → 允许的 Origin」加上页面源（如 `https://www.example.com`），否则接口和长连接都会被浏览器拦下。
-- Web 拿不到文件路径，发图片用 `sendImageBytes`，发语音用 `sendVoiceBytes`。
-- 字节版图片、语音发送失败后，字节只在内存里。刷新页面或重新登录后，这条无法重发（`IMAGE_MISSING` / `VOICE_MISSING`）。
+- Web 拿不到文件路径，发图片用 `sendImageBytes`，发语音用 `sendVoiceBytes`，发文件用 `sendFileBytes`，发视频用 `sendVideoBytes`。
+- 按字节发的内容发送失败后，字节只在内存里。刷新页面或重新登录后，还没传上去的无法重发（`IMAGE_MISSING` / `VOICE_MISSING` / `FILE_MISSING` / `VIDEO_MISSING`）。
+- 上传进度不可靠：浏览器里先读完整个请求体才发，`onSendProgress` 会直接跳到 100%。
 - Web 只缓存在内存里，刷新页面会重新从服务端拉。
 
 **自定义消息怎么发？**

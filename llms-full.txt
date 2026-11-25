@@ -4,8 +4,8 @@
 
 # IM 接入文档
 
-本文面向接入方的**后端**与**客户端（App / Web）**开发。能力：单聊；文本 / 图片 / 语音 / 位置 / 自定义五种消息；撤回；对方已读；正在输入；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后 / 撤回回调。
-群聊暂不提供。撤回与对方已读要站点在「IM 设置」打开才可用（默认关闭）。
+本文面向接入方的**后端**与**客户端（App / Web）**开发。能力：单聊；文本 / 图片 / 语音 / 文件 / 视频 / 位置 / 自定义七种消息；撤回；对方已读；正在输入；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后 / 撤回回调。
+群聊暂不提供。撤回、对方已读、文件与视频消息要站点在「IM 设置」打开才可用（默认关闭）。
 
 下文 `https://im.example.com` 代表你的 IM 服务域名，换成实际地址。
 
@@ -175,7 +175,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 请求体同客户端发消息（§5.1），多一个 `from` 字段指定发送者。走与客户端完全相同的流程：校验、限速（按 `from` 计）、幂等、发送前回调、推送、发送后回调。返回消息对象。
 收件人已把 `from` 拉黑时同样回 `IM_BLOCKED`（§4.7）。
-注意：服务端拿不到用户的上传凭证，**代发图片请用 `url` 形式**（你自己的 https 图片地址），语音不能代发。
+注意：服务端拿不到用户的上传凭证，**代发图片请用 `url` 形式**（你自己的 https 图片地址），语音、文件、视频不能代发。要发单据、附件，用业务卡片的 `web_link`（§5.9）指到你自己的页面。
 
 ### 4.6 查会话历史 `GET /conversations/{id}/messages`
 
@@ -269,13 +269,13 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/me` | 当前用户 `{user_id, nickname, avatar_url, features}`，可用作令牌自检。`features` 是站点开关：`recall_minutes` 撤回时限（分钟，0 = 没开启）、`read_receipt` 是否显示对方已读 |
+| GET | `/me` | 当前用户 `{user_id, nickname, avatar_url, features}`，可用作令牌自检。`features` 是站点开关：`recall_minutes` 撤回时限（分钟，0 = 没开启）、`read_receipt` 是否显示对方已读、`file_max_mb` / `video_max_mb` **当前用户**能发的文件、视频大小上限（MB，0 = 不能发，不要显示入口） |
 | POST | `/messages` | 发消息 |
 | GET | `/conversations` | 会话列表（游标分页） |
 | GET | `/conversations/{id}/messages` | 补拉 / 翻历史 |
 | POST | `/conversations/{id}/read` | 标已读 |
 | GET | `/unread` | 总未读 |
-| POST | `/upload` | 上传图片 / 语音 |
+| POST | `/upload` | 上传图片 / 语音 / 文件 / 视频 |
 | PUT | `/blocks/{target}` | 拉黑 |
 | DELETE | `/blocks/{target}` | 解除拉黑 |
 | GET | `/blocks` | 黑名单列表 |
@@ -293,7 +293,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | to | string | 接收方 user_id，不能是自己 |
-| type | string | `text` / `image` / `voice` / `location` / `custom` |
+| type | string | `text` / `image` / `voice` / `file` / `video` / `location` / `custom` |
 | content | object | 按 type，见下表 |
 | client_msg_id | string | 必填，1–64 字符，客户端生成的唯一 id |
 
@@ -307,14 +307,19 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | `image`（上传图） | `{"attachment_id", "ticket", "width", "height"}` | `attachment_id`、`ticket` 来自 `/upload`，且必须是**发送者本人**上传的；宽高为 1–20000 的整数 |
 | `image`（外链图） | `{"url", "width", "height"}` | `url` 为 https 链接，≤1024 字符，原样存取；宽高同上 |
 | `voice` | `{"attachment_id", "ticket", "duration"}` | `attachment_id`、`ticket` 来自 `/upload`（`kind=voice`），且必须是**发送者本人**上传的；`duration` 为 1–60 的整数秒，由客户端上报。只支持上传的语音；网页访客、服务端代发不能发 |
+| `file` | `{"attachment_id", "ticket", "name"}` | `attachment_id`、`ticket` 来自 `/upload`（`kind=file`），且必须是**发送者本人**上传的；`name` 是显示与下载用的文件名，扩展名要和内容对得上（§5.6 的对照表）。站点没开启、服务端代发不能发；网页访客要站点另外允许 |
+| `video` | `{"attachment_id", "ticket", "duration", "width", "height"}`，可选 `cover_attachment_id`、`cover_ticket` | `attachment_id`、`ticket` 来自 `/upload`（`kind=video`），且必须是**发送者本人**上传的；`duration` 为 1–3600 的整数秒，宽高为 1–20000 的整数，都由客户端上报。封面是一张用 `/upload`（图片）上传的图，没有封面就不带这两个键。站点没开启、网页访客、服务端代发不能发 |
 | `location` | `{"lat", "lng", "name", "address"}` | `lat` ∈ [-90, 90]、`lng` ∈ [-180, 180]，必填；`name` ≤100 字、`address` ≤200 字 |
 | `custom` | `{"data", "desc"}` | `data` 必须是 JSON **对象**，压缩序列化后 ≤8KB；`desc` 必填，1–100 字，用于会话预览与离线推送文字。订单、商品这类业务卡片可在 `data.im_card` 里带标准卡片外壳，见 §5.9 |
 
-图片两种形式**二选一**，同时传 `attachment_id` 与 `url` 会被拒。
+图片两种形式**二选一**，同时传 `attachment_id` 与 `url` 会被拒；上传图的附件必须真是图片，拿别的附件当图片发会被拒。
 收到的上传图消息 content 为 `{"attachment_id", "width", "height", "url"}`：`url` 是**每次读取时现签**的临时链接（约 24 小时有效），不要长期保存；本地按 `attachment_id` 缓存图片，链接过期就重新拉一次该消息拿新链接。外链图原样返回 `{"url", "width", "height"}`。
 收到的语音消息 content 为 `{"attachment_id", "duration", "size", "mime", "url"}`：`size`（字节）与 `mime`（`audio/mp4` / `audio/mpeg`；微信用户发来的语音是 `audio/wave`，8kHz 单声道，见 §10.10）由服务端给，`url` 规则同上传图。旧版客户端不认识 `voice`，请先让用户升级再开放发语音。
+收到的文件消息 content 为 `{"attachment_id", "name", "size", "mime", "url"}`：`size`（字节）与 `mime` 由服务端给；`url` 是强制下载、下载下来就是 `name` 的地址，有效期规则同上传图，网页里用 `target="_blank"` 打开即可。`name` 会去掉路径、控制字符与看不见的格式字符，超过 100 字的截短（保住扩展名）。
+收到的视频消息 content 为 `{"attachment_id", "duration", "width", "height", "size", "mime", "cover_attachment_id", "url", "cover_url"}`：`mime` 为 `video/mp4` 或 `video/quicktime`；没有封面时 `cover_attachment_id` 为 `0`、`cover_url` 为空串。两个链接的有效期规则同上传图。**收到的视频不一定放得了**：服务端不转码，iPhone 默认拍的是 HEVC，很多浏览器放不了，播放失败时请给用户下载链接。
+旧版客户端不认识 `file` 与 `video`（会显示兜底文字，会话预览可能是空白），请等用户都升级后再让站点打开。
 
-会话预览文字：text 取前 50 字，image 为 `[图片]`，voice 为 `[语音]`，location 为 `[位置]`，custom 取 `desc`，已撤回的为 `[消息已撤回]`。
+会话预览文字：text 取前 50 字，image 为 `[图片]`，voice 为 `[语音]`，file 为 `[文件] 文件名`（合计截到 50 字），video 为 `[视频]`，location 为 `[位置]`，custom 取 `desc`，已撤回的为 `[消息已撤回]`。
 
 **client_msg_id 幂等**：同一发送者的 `client_msg_id` 全局唯一（跨会话）。重复提交会直接返回**第一次的那条消息**（code 0，不再推送、不再回调），即使内容不同也以第一次为准；那条已被撤回时返回撤回后的形态。
 做法：用户点发送时生成 UUID，随本地「发送中」消息一起保存；超时或断网重试时**沿用同一个**，就不会重复发。
@@ -371,18 +376,38 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 返回 `{"total": 5}`，即该用户所有**非免打扰**会话的未读之和，可直接用于 App 角标。
 免打扰会话自己的 `unread` 照常计数，只是不计入这里（客户端可以给它显示小红点而不是数字）。与 after_send 的 `to_unread_total`（§8.2）同一口径。
 
-### 5.6 上传图片 / 语音 `POST /upload`
+### 5.6 上传图片 / 语音 / 文件 / 视频 `POST /upload`
 
-`multipart/form-data`，文件字段名 `file`；可选字段 `kind`：`image`（缺省）或 `voice`。
+`multipart/form-data`，文件字段名 `file`；可选字段 `kind`：`image`（缺省）、`voice`、`file` 或 `video`。
 
 - **图片**：只收 JPEG / PNG / GIF / WebP（按文件内容识别，不看扩展名），大小上限取站点「图片上限」设置（默认 8MB）。
 - **语音**：只收 m4a（AAC）与 mp3（按文件内容识别），不超过 2MB 与站点「图片上限」中较小的一个。推荐 AAC-LC 单声道的 m4a，iOS、Android、浏览器都能直接播放；小程序录音用 mp3。AMR、Opus、裸 AAC 不收。
+- **文件**：站点在「IM 设置」开启后可用（默认关闭），大小上限见 `/me` 的 `features.file_max_mb`（站点可配 1–100MB）。按文件内容识别类型，**文件名（multipart 的 `filename`）的扩展名还要和内容对得上**，见下表；表里没有的一律不收。图片、语音、视频请按各自的类型发。
+- **视频**：站点开启后可用（默认关闭），大小上限见 `features.video_max_mb`。只收 mp4 与 mov（按文件内容识别，不看扩展名）。服务端不转码、不截封面，**发送前请转成 H.264 的 MP4**，否则对方可能放不了。
+
+| 内容 | 收到的 `mime` | 允许的扩展名 |
+|---|---|---|
+| PDF | `application/pdf` | pdf |
+| Word | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | docx |
+| Excel | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | xlsx |
+| PowerPoint | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | pptx |
+| 老式 Office / WPS | `application/x-ole-storage` | doc、xls、ppt、wps、et、dps |
+| 纯文本 | `text/plain` | txt、csv、md、log |
+| 压缩包 | `application/zip` | zip |
+| 压缩包 | `application/x-rar-compressed` | rar |
+
+改扩展名骗不过去：apk、jar 的内容是 zip，msi 是老式 Office 的格式，bat 是纯文本，扩展名对不上都会被拒。已知的误判：开头像 HTML 标签的 txt、md 会被拒；里面有 `word/` 目录的普通 zip 会被认成 docx，按 `.zip` 发会被拒。服务端**不做病毒扫描**，请提醒用户当心来源不明的文件。
 
 ```json
 { "attachment_id": 5531, "url": "https://im.example.com/files/…", "ticket": "q8Zr…" }
 ```
 
-`url` 是临时链接，仅供本地预览；发图片消息时带 `attachment_id` + `ticket` + 宽高，发语音消息时带 `attachment_id` + `ticket` + 时长。`ticket` 与上传者绑定，别人拿去发不出去。
+`url` 是临时链接，仅供本地预览；发图片消息时带 `attachment_id` + `ticket` + 宽高，发语音消息时带 `attachment_id` + `ticket` + 时长，发文件消息时带 `attachment_id` + `ticket` + 文件名，发视频消息时带 `attachment_id` + `ticket` + 时长 + 宽高（有封面再带封面的 `attachment_id` 与 `ticket`）。`ticket` 与上传者绑定，别人拿去发不出去。`kind=file` 返回的 `url` 就是强制下载的地址。
+
+- 没开启、超过上限、类型不符 → 400 `VALIDATION`，`message` 可直接显示；上传过于频繁、当天的文件与视频数到上限 → `IM_RATE_LIMITED`（§9）。
+- **发之前先在本地按 `features` 判断大小**：请求体超过服务端上限时，服务端不收完就回错误并断开，弱网下客户端可能只看到网络错误。
+- 站点前面的反向代理要把请求体上限配到比文件、视频上限大 1MB 以上，否则代理直接回 413（不是 JSON 响应包）。
+- 上传慢，超时要放宽（SDK 为 5 分钟）。附件传好后 `attachment_id` 与 `ticket` 可以反复用，发消息失败重试时不要再传一次。
 
 ### 5.7 黑名单
 
@@ -557,8 +582,8 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - 没开启、超过时限 → `IM_RECALL_NOT_ALLOWED`；不是本人发的或不存在 → 404 `VALIDATION`；太频繁 → `IM_RATE_LIMITED`。
 - 已撤回的再调返回同一结果，不再推送、不再回调。对方把你拉黑后仍可撤回。
 - 撤回后，所有接口、推送里这条消息都变成 `type: "recalled"`（§3），会话预览变成 `[消息已撤回]`；`seq` 不变，**未读数不因撤回减少**。
-- 双方所有在线设备都会收到 `message_recalled` 推送（§6），离线的用 §5.13 补齐。收到后把本地这条消息的内容、预览、已下载的图片与语音一起替换或删掉；**撤回不可逆**，之后拿到的旧版本（如在途的拉消息结果）不要再覆盖回去。
-- 撤回前已经签出去的图片、语音链接在约 24 小时有效期内仍能打开。
+- 双方所有在线设备都会收到 `message_recalled` 推送（§6），离线的用 §5.13 补齐。收到后把本地这条消息的内容、预览、已下载的图片、语音、文件与视频一起替换或删掉；**撤回不可逆**，之后拿到的旧版本（如在途的拉消息结果）不要再覆盖回去。
+- 撤回前已经签出去的图片、语音、文件、视频链接在约 24 小时有效期内仍能打开。
 - **旧版客户端不认识撤回**：对方装的是旧版时仍能看到原文。请等客户端都升级后再让站点打开。
 
 ### 5.13 撤回增量补齐 `GET /recalls?cursor=&limit=`
@@ -758,7 +783,7 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 - 时机：开启发送前回调且配了地址时，每条新消息在通过参数校验、幂等检查与限速之后、**入库之前**调用。服务端代发（§4.5）同样触发，可按 `from` 自行放行。
 - 超时 2 秒，不重试。
-- `data`：`{from, to, type, content, client_msg_id, from_source, to_source}`（来源取值见 §8.5）；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，语音为 `{attachment_id, duration, size, mime}`，不含 ticket 与链接）。
+- `data`：`{from, to, type, content, client_msg_id, from_source, to_source}`（来源取值见 §8.5）；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，语音为 `{attachment_id, duration, size, mime}`，文件为 `{attachment_id, name, size, mime}`，视频为 `{attachment_id, duration, width, height, size, mime, cover_attachment_id}`，都不含 ticket 与链接，**看不到文件内容**；要按内容审核，在 after_send 里用链接取）。
 - 期望响应：HTTP 200 且
 
   ```json
@@ -780,14 +805,14 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
   ```
 
   `from_source` / `to_source` 是收发双方的来源，见 §8.5。
-  `to_online` 表示发送时接收方是否至少有一条长连接。上传图与语音的 `message.content.url` 约 24 小时有效。
+  `to_online` 表示发送时接收方是否至少有一条长连接。上传的图片、语音、文件、视频的 `message.content.url`（视频另有 `cover_url`）约 24 小时有效。
   `to_muted` 表示接收方是否对该会话开了免打扰（§5.10），为 `true` 时建议不发离线推送；`to` 为 `@cs` 时恒为 `false`；极少数查询失败的情况下该字段缺省，请按「缺省就当没开免打扰」处理。
   `to_unread_total` 是接收方此刻所有**非免打扰**会话的未读之和（**已含这条消息**；接收方对该会话开了免打扰时，这条不计入），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
 - 成功判定：HTTP 200 且响应体 `{"code": 0}`（`code` 为数字）。
 - 失败重试：单次超时 5 秒；第 1 次失败后约 1 分钟重试，第 2 次失败后约 5 分钟重试，第 3 次失败标记为失败、不再自动重试，可在「回调记录」手动重投（重投保持原投递 id）。实际时刻按分钟对齐。
 - 请**先落库去重再处理**：以 `X-Im-Delivery-Id` 建唯一键，见过的直接回 `{"code":0}`。
 
-**离线推送建议**：`to_source` 为 `app`、`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、voice「[语音]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
+**离线推送建议**：`to_source` 为 `app`、`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、voice「[语音]」、file「[文件] 文件名」、video「[视频]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
 
 ### 8.3 验签（PHP）
 
@@ -913,9 +938,11 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
 | 撤回、正在输入 | 各自每个用户 10 秒内 20 次，超出回 `IM_RATE_LIMITED` |
 | 撤回时限 | 站点配置，0–1440 分钟，0 = 没开启（默认）；服务端接口撤回不限时 |
-| 网页访客 | 每天发 200 条消息、上传 20 张图，超出回 `IM_RATE_LIMITED`；只能发文字与上传的图片 |
+| 上传 | 每个用户 10 秒内 20 次；文件与视频另限每人每天 100 个（上传失败的也计）。超出回 `IM_RATE_LIMITED` |
+| 文件、视频消息 | 默认关闭；站点分别配置大小上限，1–100MB，0 = 不开启 |
+| 网页访客 | 每天发 200 条消息、上传 20 次（图片与文件合计），超出回 `IM_RATE_LIMITED`；只能发文字与上传的图片，站点另外允许后可发文件，不能发视频 |
 | 用户资料 | user_id `[A-Za-z0-9_-]{1,64}`；昵称 ≤64 字；头像 ≤512 字符；批量每批 1–100 个 |
-| 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB；语音 1–60 秒、≤2MB |
+| 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB；语音 1–60 秒、≤2MB；视频 1–3600 秒；文件名 ≤100 字 |
 | 会话列表 | 每页默认 20、最大 50；首页另含全部置顶会话 |
 | 置顶会话 | 每个用户最多 50 个，超出回 400 `VALIDATION` |
 | 增量补齐 `/conversations/changes`、`/recalls` | 每页默认 100、最大 200 |
@@ -939,7 +966,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 ### 10.1 发起咨询
 
-客户端调 §5.1 发消息，`to` 填 `"@cs"`，其余字段照常（五种消息类型都可以发，上传图与语音同样要带 `ticket`）。
+客户端调 §5.1 发消息，`to` 填 `"@cs"`，其余字段照常（各种消息类型都可以发，上传的图片、语音、文件、视频同样要带 `ticket`）。坐席也能给用户发文件与视频，收到的形状与普通消息相同。
 
 - **只能由用户本人从客户端发**（`Authorization: Bearer <用户令牌>`）。服务端代发（§4.5）的 `from` 或 `to` 是 `@cs` 时一律回 `IM_USER_NOT_FOUND`——接入方后端不能冒充客服，也不能替用户发给客服。
 - 发给 `@cs` 的消息同样计入该用户的发消息限速（§9），同样经过 before_send（`data.to` 为 `"@cs"`，可按需放行）。
@@ -999,7 +1026,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 服务端不推送状态变化。建议在进入客服会话、以及收到 `@cs` 新消息时刷新一次即可。不认识的 `status` 按 `none` 处理。
 
-**机器人与转人工**：站点开了机器人时，新咨询先由机器人回答（`sender_role` 为 `bot`，见 §10.2）。以下情况自动转人工：用户发送转人工关键词（站点后台可配，默认「转人工」「人工客服」）、机器人答不了或调用失败、用户发图片或语音、用量到上限。也可以在 `status` 为 `bot` 时放一个「转人工」按钮，调 `POST /api/imcs/v1/handoff`（无请求体，鉴权同上），返回转完的状态，形状同本接口。机器人接待期间长时间没有新消息会自动结束，不发评价邀请。
+**机器人与转人工**：站点开了机器人时，新咨询先由机器人回答（`sender_role` 为 `bot`，见 §10.2）。以下情况自动转人工：用户发送转人工关键词（站点后台可配，默认「转人工」「人工客服」）、机器人答不了或调用失败、用户发图片、语音、文件或视频、用量到上限。也可以在 `status` 为 `bot` 时放一个「转人工」按钮，调 `POST /api/imcs/v1/handoff`（无请求体，鉴权同上），返回转完的状态，形状同本接口。机器人接待期间长时间没有新消息会自动结束，不发评价邀请。
 
 ### 10.5 评价 `POST /api/imcs/v1/sessions/{id}/rating`
 
@@ -1055,7 +1082,7 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 ```
 
 - **先在后台加白名单**：「客服坐席 → 网页客服 → 允许嵌入的网站」填你的网站来源（如 `https://www.example.com`，不带路径）。不在名单里的网站打不开窗口。
-- **没登录的访客**：后台打开「允许没登录的访客咨询」后可用，来源为 `visitor`（§8.5）。身份记在浏览器本地，清除浏览器数据后会变成新访客；同一个人在不同网站域名下是两个访客。访客只能发文字和图片。
+- **没登录的访客**：后台打开「允许没登录的访客咨询」后可用，来源为 `visitor`（§8.5）。身份记在浏览器本地，清除浏览器数据后会变成新访客；同一个人在不同网站域名下是两个访客。访客只能发文字和图片，站点在「IM 设置」允许后可发文件。
 - **已登录用户**：你的后端调 §4.3 给该用户签 IM 令牌，交给页面，与该用户在其他端是**同一条**客服会话：
 
 ```html
@@ -1076,7 +1103,7 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 | `GuokitCS.open()` / `GuokitCS.close()` | 打开 / 收起窗口，可绑到你自己的按钮上 |
 | `GuokitCS.setToken(token)` | 登录后传令牌；退出登录传空串，回到访客 |
 
-脚本是异步加载的，调用前先判断 `window.GuokitCS` 是否存在。窗口里机器人的消息标「AI 生成」。
+脚本是异步加载的，调用前先判断 `window.GuokitCS` 是否存在。窗口里机器人的消息标「AI 生成」。站点开启文件消息后，窗口里能发文件；视频只能看，不能发。
 
 **站点部署要求**：反向代理要把 Host（含端口）原样传给 IM 服务，否则窗口里的长连接会被来源校验拒绝；要传真实客户端 IP（`X-Forwarded-For`，且反向代理与 IM 同机），否则所有访客会共用一个新建限额。
 
@@ -1125,7 +1152,7 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 
 站点可以接公众号与小程序的客服消息：用户在微信里发的话进同一条 `@cs` 客服会话，坐席与机器人的回复发回微信。这些用户的来源是 `wechat`（§8.5），不在你的用户体系里。
 
-用户发的语音是微信的 AMR 格式，站点存成 WAV，以 `voice` 消息（`mime` 为 `audio/wave`）进会话与 after_send。微信不把文件（PDF 等）推给公众号，收不到。
+用户发的语音是微信的 AMR 格式，站点存成 WAV，以 `voice` 消息（`mime` 为 `audio/wave`）进会话与 after_send。微信不把文件（PDF 等）推给公众号，收不到；用户发的视频显示为「[视频消息，暂不支持查看]」。坐席给微信用户发文件、视频会被拒。
 
 配置在站点后台「微信渠道」完成，微信后台的「消息推送」填站点给的回调地址即可，**接入方不用写代码**。只有一种情况例外：公众号 / 小程序的消息推送地址已经指向你的系统。这时由你的系统转发：
 
@@ -1139,7 +1166,7 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 
 公开仓库 <https://github.com/guokit/guokit-im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
 
-- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。
+- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。0.9.0 起提供文件与视频 `sendFile` / `sendVideo`（按路径发时边读边传）、`fileUrl` / `videoUrl` / `videoCoverUrl` 与上传进度 `onSendProgress`（§5.1、§5.6，需要服务端 v1.19.0）；选文件、压缩转码、截封面、播放、下载由 App 自己做。
 - **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
 - 两者先以 git 依赖分发，安装方式见仓库 README。
 
@@ -1584,7 +1611,7 @@ paths:
       summary: 以某用户身份代发消息
       description: |
         与客户端发消息走完全相同的流程（校验、幂等、黑名单、限速按 `from` 计、发送前回调、推送、发送后回调）。
-        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式。`from` 或 `to` 为 `@cs` 时一律回 `IM_USER_NOT_FOUND`。
+        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式，语音、文件、视频不能代发。`from` 或 `to` 为 `@cs` 时一律回 `IM_USER_NOT_FOUND`。
       security: [{ ApiKey: [] }]
       requestBody:
         required: true
@@ -1824,10 +1851,15 @@ paths:
     post:
       tags: [客户端]
       operationId: uploadImage
-      summary: 上传图片 / 语音
+      summary: 上传图片 / 语音 / 文件 / 视频
       description: |
         图片只收 JPEG / PNG / GIF / WebP，大小上限取站点「图片上限」设置（默认 8MB）；语音（`kind=voice`）只收 m4a（AAC）与 mp3，
         不超过 2MB 与「图片上限」中较小的一个，网页访客不能传。都按文件内容识别。与发消息同口径单独限速（10 秒 20 次）。
+
+        文件（`kind=file`）与视频（`kind=video`）要站点在「IM 设置」开启（默认关闭），大小上限见 `/me` 的 `features`，
+        每人每天合计 100 个（网页访客沿用每天 20 次，与图片合计；文件要站点另外允许，不能传视频）。
+        文件收 pdf、docx、xlsx、pptx、doc / xls / ppt / wps / et / dps、txt / csv / md / log、zip、rar，
+        文件名（multipart 的 `filename`）的扩展名要和内容对得上；视频只收 mp4 与 mov，服务端不转码，请先转成 H.264 的 MP4。
       security: [{ UserToken: [] }]
       requestBody:
         required: true
@@ -1840,14 +1872,14 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 图片或语音文件
+                  description: 图片、语音、文件或视频
                 kind:
                   type: string
-                  enum: [image, voice]
+                  enum: [image, voice, file, video]
                   default: image
       responses:
         '200':
-          description: 成功返回附件 id、临时预览链接与上传凭证；超频时为 `IM_RATE_LIMITED`。
+          description: 成功返回附件 id、临时链接与上传凭证；超频、当天的文件与视频数到上限时为 `IM_RATE_LIMITED`。
           content:
             application/json:
               schema:
@@ -2683,14 +2715,16 @@ components:
               properties:
                 recall_minutes: { type: integer, minimum: 0, description: 撤回时限（分钟），0 = 没开启 }
                 read_receipt: { type: boolean, description: 是否显示对方已读 }
+                file_max_mb: { type: integer, minimum: 0, maximum: 100, description: 当前用户能发的文件大小上限（MB），0 = 不能发；v1.19.0 之前的服务端没有 }
+                video_max_mb: { type: integer, minimum: 0, maximum: 100, description: 当前用户能发的视频大小上限（MB），0 = 不能发；v1.19.0 之前的服务端没有 }
 
     UploadResult:
       type: object
       required: [attachment_id, url, ticket]
       properties:
-        attachment_id: { type: integer, format: int64, description: 附件 id，发图片 / 语音消息时带上 }
-        url: { type: string, description: 临时链接，仅供本地预览 }
-        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片 / 语音消息时带上 }
+        attachment_id: { type: integer, format: int64, description: 附件 id，发图片 / 语音 / 文件 / 视频消息时带上；也可作视频封面 }
+        url: { type: string, description: 临时链接，仅供本地预览；kind=file 时是强制下载的地址 }
+        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片 / 语音 / 文件 / 视频消息时带上 }
 
     BlockItem:
       type: object
@@ -2758,6 +2792,68 @@ components:
         size: { type: integer, format: int64, description: 字节 }
         mime: { type: string, enum: [audio/mp4, audio/mpeg, audio/wave], description: audio/wave 只出现在微信用户发来的语音里（8kHz 单声道） }
         url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
+
+    FileUploadContent:
+      type: object
+      title: file（发送时）
+      description: 文件；attachment_id 与 ticket 来自 `/upload`（kind=file），必须是发送者本人上传的。站点没开启、服务端代发不支持，网页访客要站点另外允许。
+      required: [attachment_id, ticket, name]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        ticket: { type: string }
+        name: { type: string, minLength: 1, description: 显示与下载用的文件名，扩展名要和内容对得上；去掉路径与控制字符，超过 100 字截短 }
+
+    FileContent:
+      type: object
+      title: file（读取时）
+      required: [attachment_id, name, size, mime, url]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        size: { type: integer, format: int64, description: 字节 }
+        mime:
+          type: string
+          description: 类型与扩展名的对照见接入文档 §5.6
+          enum:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+            - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+            - application/vnd.openxmlformats-officedocument.presentationml.presentation
+            - application/x-ole-storage
+            - text/plain
+            - application/zip
+            - application/x-rar-compressed
+        url: { type: string, description: 现签的下载地址（约 24 小时有效），强制下载、带原文件名；签名失败时为空串 }
+
+    VideoUploadContent:
+      type: object
+      title: video（发送时）
+      description: 视频；attachment_id 与 ticket 来自 `/upload`（kind=video），封面是一张用 `/upload` 上传的图片（可选），都必须是发送者本人上传的。站点没开启、网页访客、服务端代发不支持。
+      required: [attachment_id, ticket, duration, width, height]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        ticket: { type: string }
+        duration: { type: integer, minimum: 1, maximum: 3600, description: 秒，客户端上报 }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+        cover_attachment_id: { type: integer, format: int64, description: 没有封面就不带 }
+        cover_ticket: { type: string, description: 带了 cover_attachment_id 时必填 }
+
+    VideoContent:
+      type: object
+      title: video（读取时）
+      description: 服务端不转码，对方发来的视频（如 HEVC）不一定放得了，播放失败时请给下载链接。
+      required: [attachment_id, duration, width, height, size, mime, cover_attachment_id, url, cover_url]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        duration: { type: integer, minimum: 1, maximum: 3600, description: 秒 }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+        size: { type: integer, format: int64, description: 字节 }
+        mime: { type: string, enum: [video/mp4, video/quicktime] }
+        cover_attachment_id: { type: integer, format: int64, description: 没有封面为 0 }
+        url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
+        cover_url: { type: string, description: 封面的现签临时链接；没有封面、签名失败时为空串 }
 
     RecalledContent:
       type: object
@@ -2840,20 +2936,22 @@ components:
         to: { type: string, description: 接收方 user_id，不能是自己；客户端可填 `@cs` 发给平台客服 }
         type:
           type: string
-          enum: [text, image, voice, location, custom]
+          enum: [text, image, voice, file, video, location, custom]
         content:
-          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；voice → VoiceUploadContent；location → LocationContent；custom → CustomContent
-          oneOf:
+          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；voice → VoiceUploadContent；file → FileUploadContent；video → VideoUploadContent；location → LocationContent；custom → CustomContent
+          anyOf:
             - $ref: '#/components/schemas/TextContent'
             - $ref: '#/components/schemas/ImageUploadContent'
             - $ref: '#/components/schemas/ImageUrlContent'
             - $ref: '#/components/schemas/VoiceUploadContent'
+            - $ref: '#/components/schemas/FileUploadContent'
+            - $ref: '#/components/schemas/VideoUploadContent'
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
         client_msg_id: { type: string, minLength: 1, maxLength: 64, description: 客户端生成的唯一 id（建议 UUID），重试时沿用同一个 }
 
     ServerSendMessageRequest:
-      description: 代发请求，比客户端发消息多一个 `from`。代发图片请用外链图形态。
+      description: 代发请求，比客户端发消息多一个 `from`。代发图片请用外链图形态，语音、文件、视频不能代发。
       allOf:
         - $ref: '#/components/schemas/SendMessageRequest'
         - type: object
@@ -2872,15 +2970,17 @@ components:
         from: { type: string, description: 发送者 user_id；客服发来的为 `@cs` }
         type:
           type: string
-          enum: [text, image, voice, location, custom, recalled]
+          enum: [text, image, voice, file, video, location, custom, recalled]
           description: recalled 为已撤回；将来可能增加取值，不认识的兜底显示
         content:
-          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；voice → VoiceContent；recalled → RecalledContent；location → LocationContent；custom → CustomContent
-          oneOf:
+          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；voice → VoiceContent；file → FileContent；video → VideoContent；recalled → RecalledContent；location → LocationContent；custom → CustomContent
+          anyOf:
             - $ref: '#/components/schemas/TextContent'
             - $ref: '#/components/schemas/ImageAttachmentContent'
             - $ref: '#/components/schemas/ImageUrlContent'
             - $ref: '#/components/schemas/VoiceContent'
+            - $ref: '#/components/schemas/FileContent'
+            - $ref: '#/components/schemas/VideoContent'
             - $ref: '#/components/schemas/RecalledContent'
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
@@ -2911,10 +3011,10 @@ components:
         from: { type: string }
         type:
           type: string
-          enum: [text, image, voice, location, custom, recalled]
+          enum: [text, image, voice, file, video, location, custom, recalled]
         preview:
           type: string
-          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，voice 为「[语音]」，location 为「[位置]」，custom 取 desc，已撤回为「[消息已撤回]」
+          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，voice 为「[语音]」，file 为「[文件] 文件名」（合计截到 50 字），video 为「[视频]」，location 为「[位置]」，custom 取 desc，已撤回为「[消息已撤回]」
         created_at: { $ref: '#/components/schemas/DateTime' }
 
     Conversation:

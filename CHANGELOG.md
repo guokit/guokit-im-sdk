@@ -2,6 +2,15 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.9.0 — 2026-11-25
+
+文件与视频消息。需要 IM 服务端 v1.19.0；旧服务端上 `features()` 两项按 0，发送失败，其余功能不受影响。**要站点在「IM 设置」打开（默认关闭）；旧版 App 不认识这两种消息，会话预览是空白，请等用户都升级后再打开。**
+
+- **Flutter**：新增 `sendFile` / `sendFileBytes`、`sendVideo` / `sendVideoBytes`、`fileUrl` / `videoUrl` / `videoCoverUrl`、上传进度 `onSendProgress`；`ImMessage` 加 `fileName` / `fileSize` / `videoDuration`，`ImFeatures` 加 `fileMaxMb` / `videoMaxMb`（缺省 0）；新错误码 `FILE_MISSING`、`VIDEO_MISSING`。只加不改
+- **Flutter**：按路径发的文件、视频边读边传，不整个读进内存，上传最长等 5 分钟；视频封面先传，传过的重发不再传。选文件、转码、截封面、播放、下载由 App 自己做，示例 App 演示了选文件、选视频、播放与下载
+- **PHP**：代码不变；文件、视频不能代发
+- 接入文档改 §4.5、§5.1、§5.6（含类型与扩展名对照表）、§8.1、§9、§10；OpenAPI、Skill、`llms-full.txt` 同步。OpenAPI 的消息 `content` 由 `oneOf` 改为 `anyOf`：视频的字段包含了图片的字段，`oneOf` 会判成不合法
+
 ## v0.8.0 — 2026-11-25
 
 撤回、语音消息、对方已读、正在输入。需要 IM 服务端 v1.17.0；旧服务端上 `recall` 抛 `ImApiException`、语音发送失败、`features()` 全部按没开启，其余功能不受影响。**撤回与对方已读要站点在「IM 设置」打开，请等用户都升级后再打开。**

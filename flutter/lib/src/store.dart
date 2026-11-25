@@ -206,16 +206,20 @@ ImConversation clearedConversation(ImConversation c, int clearSeq) {
   );
 }
 
-/// 会话预览文字，口径同服务端：text 前 50 字，image `[图片]`，voice `[语音]`，location `[位置]`，custom 取 desc。
+/// 会话预览文字，口径同服务端：text 前 50 字，image `[图片]`，voice `[语音]`，
+/// file `[文件] 名字`（共 50 字以内），video `[视频]`，location `[位置]`，custom 取 desc。
 String previewOf(ImMessage m) {
   switch (m.type) {
     case 'text':
-      final runes = ((m.content['text'] as String?) ?? '').runes;
-      return String.fromCharCodes(runes.take(50));
+      return _first50((m.content['text'] as String?) ?? '');
     case 'image':
       return '[图片]';
     case 'voice':
       return '[语音]';
+    case 'file':
+      return _first50('[文件] ${(m.content['name'] as String?) ?? ''}');
+    case 'video':
+      return '[视频]';
     case 'recalled':
       return '[消息已撤回]';
     case 'location':
@@ -226,6 +230,8 @@ String previewOf(ImMessage m) {
       return '';
   }
 }
+
+String _first50(String s) => String.fromCharCodes(s.runes.take(50));
 
 /// 已确认消息对会话的影响，见 [ImStore.upsertMessage]。
 ///

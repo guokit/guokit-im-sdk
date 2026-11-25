@@ -9,16 +9,25 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:guokit_im/guokit_im.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 
 const _baseUrl = String.fromEnvironment('IM_BASE_URL', defaultValue: 'http://127.0.0.1:8080');
 const _user = String.fromEnvironment('IM_USER');
 const _token = String.fromEnvironment('IM_TOKEN');
 const _peer = String.fromEnvironment('IM_PEER');
+
+// 能发的文件类型（接入文档 §5.6）。扩展名还要和内容对得上，由服务端核。
+const _fileExts = [
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'wps', 'et', 'dps', //
+  'txt', 'csv', 'md', 'log', 'zip', 'rar',
+];
 
 // 1x1 透明 PNG，演示 sendImageBytes（真实 App 用 image_picker 等取图）。
 final _demoPng = base64Decode(
@@ -107,6 +116,7 @@ class _ChatPageState extends State<ChatPage> {
   ImFeatures? _features;
   bool _peerTyping = false;
   DateTime? _recordingSince;
+  final Map<String, double> _progress = {}; // clientMsgId → 上传进度
 
   @override
   void initState() {
@@ -116,6 +126,9 @@ class _ChatPageState extends State<ChatPage> {
       im.onMessageUpdated.listen(_onMessage),
       im.onTyping.listen((t) {
         if (t.conversationId == _convId) setState(() => _peerTyping = t.active);
+      }),
+      im.onSendProgress.listen((p) {
+        setState(() => _progress[p.clientMsgId] = p.total == 0 ? 0 : p.sent / p.total);
       }),
       im.onConversationsChanged.listen((list) {
         for (final c in list) {
@@ -184,6 +197,68 @@ class _ChatPageState extends State<ChatPage> {
     if (url != null && url.isNotEmpty) await _player.play(UrlSource(url));
   }
 
+  void _showResult(ImMessage r) {
+    if (r.status != ImMessageStatus.sent) _tip('发送失败：${r.errorCode} ${r.errorMessage ?? ''}');
+  }
+
+  // 大小先在本地拦：超限的服务端收到头就断开，弱网下可能只看到网络错误。
+  bool _tooBig(int? size, int maxMb) {
+    if (size == null || size <= maxMb << 20) return false;
+    _tip('文件过大，最大 $maxMb MB');
+    return true;
+  }
+
+  Future<void> _sendFile() async {
+    final f = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: _fileExts);
+    if (f == null || _tooBig(await f.length(), _features!.fileMaxMb)) return;
+    final path = f.path;
+    _showResult(path == null
+        ? await im.sendFileBytes(widget.peer, await f.readAsBytes(), name: f.name) // Web
+        : await im.sendFile(widget.peer, path, name: f.name));
+  }
+
+  Future<void> _sendVideo() async {
+    final f = await FilePicker.pickFile(
+      type: FileType.video,
+      // iPhone 默认拍的是 HEVC，很多浏览器放不了；这里让系统转成通用格式。其他平台要自己转成 H.264 的 MP4。
+      darwinOptions: const DarwinOptions(
+        assetRepresentationMode: DarwinAssetRepresentationMode.compatible,
+      ),
+    );
+    if (f == null || _tooBig(await f.length(), _features!.videoMaxMb)) return;
+    // 时长与宽高用播放器读。封面也要 App 自己截（传 coverBytes），示例没带截图插件，不演示。
+    final player = VideoPlayerController.networkUrl(f.uri);
+    final VideoPlayerValue v;
+    try {
+      await player.initialize();
+      v = player.value;
+    } catch (_) {
+      return _tip('读不了这个视频');
+    } finally {
+      await player.dispose();
+    }
+    final (w, h) = (v.size.width.round(), v.size.height.round());
+    final path = f.path;
+    _showResult(path == null
+        ? await im.sendVideoBytes(widget.peer, await f.readAsBytes(),
+            duration: v.duration, width: w, height: h, filename: f.name) // Web
+        : await im.sendVideo(widget.peer, path, duration: v.duration, width: w, height: h));
+  }
+
+  // 下载、播放由 App 自己做，SDK 只给地址。这里交给系统浏览器下载，下载下来是原文件名。
+  Future<void> _download(ImMessage m) async {
+    final url = await im.fileUrl(m);
+    if (url != null && url.isNotEmpty) {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> _watch(ImMessage m) async {
+    final url = await im.videoUrl(m);
+    if (url == null || url.isEmpty || !mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => VideoPage(url: url)));
+  }
+
   Future<void> _load() async {
     final conv = await im.conversationWith(widget.peer);
     if (conv == null) return; // 还没有会话：直接发消息即可，服务端会建
@@ -197,7 +272,10 @@ class _ChatPageState extends State<ChatPage> {
   void _onMessage(ImMessage m) {
     final mine = m.from == widget.peer || m.to == widget.peer;
     if (!mine || !mounted) return;
-    setState(() => _msgs[m.clientMsgId] = m);
+    setState(() {
+      _msgs[m.clientMsgId] = m;
+      if (m.status != ImMessageStatus.sending) _progress.remove(m.clientMsgId);
+    });
     _convId ??= m.conversationId;
     if (!m.isSelf && _convId != null) im.markRead(_convId!);
   }
@@ -228,7 +306,12 @@ class _ChatPageState extends State<ChatPage> {
                 child: Padding(
                   padding: const EdgeInsets.all(6),
                   child: GestureDetector(
-                    onTap: m.type == 'voice' ? () => _play(m) : null,
+                    onTap: switch (m.type) {
+                      'voice' => () => _play(m),
+                      'file' => () => _download(m),
+                      'video' => () => _watch(m),
+                      _ => null,
+                    },
                     onLongPress: _canRecall(m) ? () => _recall(m) : null, // 长按撤回
                     child: Text('${_describe(m)}  [${_status(m)}]'),
                   ),
@@ -246,6 +329,10 @@ class _ChatPageState extends State<ChatPage> {
               icon: Icon(_recordingSince == null ? Icons.mic : Icons.stop),
               onPressed: _toggleRecord,
             ),
+          if ((_features?.fileMaxMb ?? 0) > 0) // 站点没开，或当前用户不能发
+            IconButton(icon: const Icon(Icons.attach_file), onPressed: _sendFile),
+          if ((_features?.videoMaxMb ?? 0) > 0)
+            IconButton(icon: const Icon(Icons.videocam), onPressed: _sendVideo),
           Expanded(
             child: TextField(
               controller: _input,
@@ -263,6 +350,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _status(ImMessage m) {
+    final p = _progress[m.clientMsgId];
+    if (p != null) return '${(p * 100).round()}%';
     final read = _peerReadSeq;
     if (!m.isSelf || m.seq == null || read == null) return m.status.name;
     return m.seq! <= read ? '已读' : '未读';
@@ -272,10 +361,67 @@ class _ChatPageState extends State<ChatPage> {
         'text' => m.content['text'] as String? ?? '',
         'image' => '[图片 ${m.content['width'] ?? '?'}x${m.content['height'] ?? '?'}]',
         'voice' => '[语音 ${m.voiceDuration?.inSeconds ?? '?'}″]',
+        'file' => '[文件] ${m.fileName} ${_size(m.fileSize)}',
+        'video' => '[视频 ${m.videoDuration?.inSeconds ?? '?'}″ ${_size(m.fileSize)}]',
         'recalled' => m.recalledBy == 'sender'
             ? '${m.isSelf ? '你' : '对方'}撤回了一条消息'
             : '消息已撤回',
         'location' => '[位置]',
         _ => m.content['desc'] as String? ?? '[${m.type}]',
       };
+}
+
+String _size(int? bytes) => bytes == null
+    ? ''
+    : bytes < 1 << 20
+        ? '${(bytes / 1024).ceil()} KB'
+        : '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+
+class VideoPage extends StatefulWidget {
+  const VideoPage({super.key, required this.url});
+  final String url;
+  @override
+  State<VideoPage> createState() => _VideoPageState();
+}
+
+class _VideoPageState extends State<VideoPage> {
+  late final _player = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _player.initialize().then((_) async {
+      if (!mounted) return;
+      setState(() {});
+      await _player.play();
+    }).catchError((Object _) {
+      if (mounted) setState(() => _failed = true); // 多为 HEVC
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(),
+        body: Center(
+          child: _failed
+              ? TextButton(
+                  onPressed: () =>
+                      launchUrl(Uri.parse(widget.url), mode: LaunchMode.externalApplication),
+                  child: const Text('放不了这个视频，点这里在浏览器打开'),
+                )
+              : _player.value.isInitialized
+                  ? AspectRatio(
+                      aspectRatio: _player.value.aspectRatio,
+                      child: VideoPlayer(_player),
+                    )
+                  : const CircularProgressIndicator(),
+        ),
+      );
 }

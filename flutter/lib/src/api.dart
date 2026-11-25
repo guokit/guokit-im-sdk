@@ -17,7 +17,10 @@ import 'errors.dart';
 import 'models.dart';
 import 'token.dart';
 
-typedef _Build = http.BaseRequest Function(String token);
+typedef _Build = FutureOr<http.BaseRequest> Function(String token);
+
+/// 要上传的内容：字节数与取流的方法。每次尝试（含换令牌重发）都重新取，流只能读一次。
+typedef ImUploadBody = ({int length, Stream<List<int>> stream});
 
 class ImApi {
   ImApi({
@@ -26,6 +29,7 @@ class ImApi {
     http.Client? client,
     this.timeout = const Duration(seconds: 15),
     this.uploadTimeout = const Duration(seconds: 60),
+    this.mediaUploadTimeout = const Duration(minutes: 5),
   }) : _base = baseUrl.endsWith('/')
            ? baseUrl.substring(0, baseUrl.length - 1)
            : baseUrl,
@@ -48,6 +52,9 @@ class ImApi {
 
   /// 上传图片的超时：图片最大 8MB，慢网下 15 秒不够。
   final Duration uploadTimeout;
+
+  /// 上传文件、视频的超时。超时只是不再等，底层请求不中断。
+  final Duration mediaUploadTimeout;
 
   /// `GET /me`：当前用户，可用作令牌自检。
   Future<ImPeer> me() async =>
@@ -107,22 +114,44 @@ class ImApi {
     ),
   );
 
-  /// `POST /upload`：上传图片或语音（multipart 字段 `file`，[kind] 为 `image` / `voice`）。服务端按内容识别格式，[filename] 只作展示。
+  /// `POST /upload`：上传图片、语音、文件或视频（multipart 字段 `file`，[kind] 为 `image` / `voice` / `file` / `video`）。
+  /// 服务端按内容识别格式，文件另核 [filename] 的扩展名与内容对得上。
+  ///
+  /// [open] 每次尝试都调一次，抛的异常原样上抛。[onProgress] 报已交给系统的字节数与总字节数，换令牌重发时从头计；
+  /// Web 上不可靠：浏览器里 `http` 包先读完整个请求体才发，会直接跳到 100%。
   Future<({int attachmentId, String url, String ticket})> upload(
-    List<int> bytes,
+    Future<ImUploadBody> Function() open,
     String filename, {
     String kind = 'image',
+    void Function(int sent, int total)? onProgress,
   }) async {
     final d = _asMap(
-      await _send((token) {
-        final r = http.MultipartRequest('POST', _uri('/upload'))
-          ..headers['Authorization'] = 'Bearer $token'
-          ..fields['kind'] = kind
-          ..files.add(
-            http.MultipartFile.fromBytes('file', bytes, filename: filename),
-          );
-        return r;
-      }, timeout: uploadTimeout),
+      await _send(
+        (token) async {
+          final body = await open();
+          var sent = 0;
+          return http.MultipartRequest('POST', _uri('/upload'))
+            ..headers['Authorization'] = 'Bearer $token'
+            ..fields['kind'] = kind
+            ..files.add(
+              http.MultipartFile(
+                'file',
+                onProgress == null
+                    ? body.stream
+                    : body.stream.map((chunk) {
+                        sent += chunk.length;
+                        onProgress(sent, body.length);
+                        return chunk;
+                      }),
+                body.length,
+                filename: filename,
+              ),
+            );
+        },
+        timeout: kind == 'file' || kind == 'video'
+            ? mediaUploadTimeout
+            : uploadTimeout,
+      ),
     );
     return (
       attachmentId: (d['attachment_id'] as num).toInt(),
@@ -365,12 +394,12 @@ class ImApi {
   Future<Object?> _send(_Build build, {Duration? timeout}) async {
     var token = await _tokens.current();
     try {
-      return await _once(build(token), timeout ?? this.timeout);
+      return await _once(await build(token), timeout ?? this.timeout);
     } on ImApiException catch (e) {
       if (e.httpStatus != 401 || !e.isTokenInvalid) rethrow;
     }
     token = await _tokens.refresh(stale: token);
-    return _once(build(token), timeout ?? this.timeout);
+    return _once(await build(token), timeout ?? this.timeout);
   }
 
   Future<Object?> _once(http.BaseRequest req, Duration timeout) async {

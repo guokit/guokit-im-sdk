@@ -430,7 +430,7 @@ paths:
       summary: 以某用户身份代发消息
       description: |
         与客户端发消息走完全相同的流程（校验、幂等、黑名单、限速按 `from` 计、发送前回调、推送、发送后回调）。
-        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式。`from` 或 `to` 为 `@cs` 时一律回 `IM_USER_NOT_FOUND`。
+        服务端拿不到用户的上传凭证，代发图片请用 `url` 形式，语音、文件、视频不能代发。`from` 或 `to` 为 `@cs` 时一律回 `IM_USER_NOT_FOUND`。
       security: [{ ApiKey: [] }]
       requestBody:
         required: true
@@ -670,10 +670,15 @@ paths:
     post:
       tags: [客户端]
       operationId: uploadImage
-      summary: 上传图片 / 语音
+      summary: 上传图片 / 语音 / 文件 / 视频
       description: |
         图片只收 JPEG / PNG / GIF / WebP，大小上限取站点「图片上限」设置（默认 8MB）；语音（`kind=voice`）只收 m4a（AAC）与 mp3，
         不超过 2MB 与「图片上限」中较小的一个，网页访客不能传。都按文件内容识别。与发消息同口径单独限速（10 秒 20 次）。
+
+        文件（`kind=file`）与视频（`kind=video`）要站点在「IM 设置」开启（默认关闭），大小上限见 `/me` 的 `features`，
+        每人每天合计 100 个（网页访客沿用每天 20 次，与图片合计；文件要站点另外允许，不能传视频）。
+        文件收 pdf、docx、xlsx、pptx、doc / xls / ppt / wps / et / dps、txt / csv / md / log、zip、rar，
+        文件名（multipart 的 `filename`）的扩展名要和内容对得上；视频只收 mp4 与 mov，服务端不转码，请先转成 H.264 的 MP4。
       security: [{ UserToken: [] }]
       requestBody:
         required: true
@@ -686,14 +691,14 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 图片或语音文件
+                  description: 图片、语音、文件或视频
                 kind:
                   type: string
-                  enum: [image, voice]
+                  enum: [image, voice, file, video]
                   default: image
       responses:
         '200':
-          description: 成功返回附件 id、临时预览链接与上传凭证；超频时为 `IM_RATE_LIMITED`。
+          description: 成功返回附件 id、临时链接与上传凭证；超频、当天的文件与视频数到上限时为 `IM_RATE_LIMITED`。
           content:
             application/json:
               schema:
@@ -1529,14 +1534,16 @@ components:
               properties:
                 recall_minutes: { type: integer, minimum: 0, description: 撤回时限（分钟），0 = 没开启 }
                 read_receipt: { type: boolean, description: 是否显示对方已读 }
+                file_max_mb: { type: integer, minimum: 0, maximum: 100, description: 当前用户能发的文件大小上限（MB），0 = 不能发；v1.19.0 之前的服务端没有 }
+                video_max_mb: { type: integer, minimum: 0, maximum: 100, description: 当前用户能发的视频大小上限（MB），0 = 不能发；v1.19.0 之前的服务端没有 }
 
     UploadResult:
       type: object
       required: [attachment_id, url, ticket]
       properties:
-        attachment_id: { type: integer, format: int64, description: 附件 id，发图片 / 语音消息时带上 }
-        url: { type: string, description: 临时链接，仅供本地预览 }
-        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片 / 语音消息时带上 }
+        attachment_id: { type: integer, format: int64, description: 附件 id，发图片 / 语音 / 文件 / 视频消息时带上；也可作视频封面 }
+        url: { type: string, description: 临时链接，仅供本地预览；kind=file 时是强制下载的地址 }
+        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片 / 语音 / 文件 / 视频消息时带上 }
 
     BlockItem:
       type: object
@@ -1604,6 +1611,68 @@ components:
         size: { type: integer, format: int64, description: 字节 }
         mime: { type: string, enum: [audio/mp4, audio/mpeg, audio/wave], description: audio/wave 只出现在微信用户发来的语音里（8kHz 单声道） }
         url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
+
+    FileUploadContent:
+      type: object
+      title: file（发送时）
+      description: 文件；attachment_id 与 ticket 来自 `/upload`（kind=file），必须是发送者本人上传的。站点没开启、服务端代发不支持，网页访客要站点另外允许。
+      required: [attachment_id, ticket, name]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        ticket: { type: string }
+        name: { type: string, minLength: 1, description: 显示与下载用的文件名，扩展名要和内容对得上；去掉路径与控制字符，超过 100 字截短 }
+
+    FileContent:
+      type: object
+      title: file（读取时）
+      required: [attachment_id, name, size, mime, url]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        size: { type: integer, format: int64, description: 字节 }
+        mime:
+          type: string
+          description: 类型与扩展名的对照见接入文档 §5.6
+          enum:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+            - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+            - application/vnd.openxmlformats-officedocument.presentationml.presentation
+            - application/x-ole-storage
+            - text/plain
+            - application/zip
+            - application/x-rar-compressed
+        url: { type: string, description: 现签的下载地址（约 24 小时有效），强制下载、带原文件名；签名失败时为空串 }
+
+    VideoUploadContent:
+      type: object
+      title: video（发送时）
+      description: 视频；attachment_id 与 ticket 来自 `/upload`（kind=video），封面是一张用 `/upload` 上传的图片（可选），都必须是发送者本人上传的。站点没开启、网页访客、服务端代发不支持。
+      required: [attachment_id, ticket, duration, width, height]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        ticket: { type: string }
+        duration: { type: integer, minimum: 1, maximum: 3600, description: 秒，客户端上报 }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+        cover_attachment_id: { type: integer, format: int64, description: 没有封面就不带 }
+        cover_ticket: { type: string, description: 带了 cover_attachment_id 时必填 }
+
+    VideoContent:
+      type: object
+      title: video（读取时）
+      description: 服务端不转码，对方发来的视频（如 HEVC）不一定放得了，播放失败时请给下载链接。
+      required: [attachment_id, duration, width, height, size, mime, cover_attachment_id, url, cover_url]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        duration: { type: integer, minimum: 1, maximum: 3600, description: 秒 }
+        width: { type: integer, minimum: 1, maximum: 20000 }
+        height: { type: integer, minimum: 1, maximum: 20000 }
+        size: { type: integer, format: int64, description: 字节 }
+        mime: { type: string, enum: [video/mp4, video/quicktime] }
+        cover_attachment_id: { type: integer, format: int64, description: 没有封面为 0 }
+        url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
+        cover_url: { type: string, description: 封面的现签临时链接；没有封面、签名失败时为空串 }
 
     RecalledContent:
       type: object
@@ -1686,20 +1755,22 @@ components:
         to: { type: string, description: 接收方 user_id，不能是自己；客户端可填 `@cs` 发给平台客服 }
         type:
           type: string
-          enum: [text, image, voice, location, custom]
+          enum: [text, image, voice, file, video, location, custom]
         content:
-          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；voice → VoiceUploadContent；location → LocationContent；custom → CustomContent
-          oneOf:
+          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；voice → VoiceUploadContent；file → FileUploadContent；video → VideoUploadContent；location → LocationContent；custom → CustomContent
+          anyOf:
             - $ref: '#/components/schemas/TextContent'
             - $ref: '#/components/schemas/ImageUploadContent'
             - $ref: '#/components/schemas/ImageUrlContent'
             - $ref: '#/components/schemas/VoiceUploadContent'
+            - $ref: '#/components/schemas/FileUploadContent'
+            - $ref: '#/components/schemas/VideoUploadContent'
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
         client_msg_id: { type: string, minLength: 1, maxLength: 64, description: 客户端生成的唯一 id（建议 UUID），重试时沿用同一个 }
 
     ServerSendMessageRequest:
-      description: 代发请求，比客户端发消息多一个 `from`。代发图片请用外链图形态。
+      description: 代发请求，比客户端发消息多一个 `from`。代发图片请用外链图形态，语音、文件、视频不能代发。
       allOf:
         - $ref: '#/components/schemas/SendMessageRequest'
         - type: object
@@ -1718,15 +1789,17 @@ components:
         from: { type: string, description: 发送者 user_id；客服发来的为 `@cs` }
         type:
           type: string
-          enum: [text, image, voice, location, custom, recalled]
+          enum: [text, image, voice, file, video, location, custom, recalled]
           description: recalled 为已撤回；将来可能增加取值，不认识的兜底显示
         content:
-          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；voice → VoiceContent；recalled → RecalledContent；location → LocationContent；custom → CustomContent
-          oneOf:
+          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；voice → VoiceContent；file → FileContent；video → VideoContent；recalled → RecalledContent；location → LocationContent；custom → CustomContent
+          anyOf:
             - $ref: '#/components/schemas/TextContent'
             - $ref: '#/components/schemas/ImageAttachmentContent'
             - $ref: '#/components/schemas/ImageUrlContent'
             - $ref: '#/components/schemas/VoiceContent'
+            - $ref: '#/components/schemas/FileContent'
+            - $ref: '#/components/schemas/VideoContent'
             - $ref: '#/components/schemas/RecalledContent'
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
@@ -1757,10 +1830,10 @@ components:
         from: { type: string }
         type:
           type: string
-          enum: [text, image, voice, location, custom, recalled]
+          enum: [text, image, voice, file, video, location, custom, recalled]
         preview:
           type: string
-          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，voice 为「[语音]」，location 为「[位置]」，custom 取 desc，已撤回为「[消息已撤回]」
+          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，voice 为「[语音]」，file 为「[文件] 文件名」（合计截到 50 字），video 为「[视频]」，location 为「[位置]」，custom 取 desc，已撤回为「[消息已撤回]」
         created_at: { $ref: '#/components/schemas/DateTime' }
 
     Conversation:

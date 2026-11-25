@@ -12,7 +12,7 @@
     { "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }
   ],
   "require": {
-    "guokit/im": "^0.8"
+    "guokit/im": "^0.9"
   }
 }
 ```
@@ -53,7 +53,7 @@ try {
 | `setConversationSettings($userId, $peerId, array $settings)` | 置顶 / 免打扰：`['pinned'=>bool, 'muted'=>bool]`，至少一个 |
 | `clearConversation($userId, $peerId)` | 清空该用户这一侧的聊天记录 |
 | `deleteConversation($userId, $peerId)` | 删除会话（清空 + 移出列表 + 取消置顶，免打扰保留） |
-| `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式，语音不能代发 |
+| `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式，语音、文件、视频不能代发（要发单据用业务卡片的 `web_link`） |
 | `recallMessage(int $messageId)` | 撤回消息，不限时，返回撤回后的消息对象（`type` 为 `recalled`）；不存在抛 `VALIDATION`（HTTP 404）。需服务端 ≥ v1.17.0 |
 | `history($conversationId, $afterSeq = null, $beforeSeq = null, $limit = 30)` | 查会话历史（审计） |
 | `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |

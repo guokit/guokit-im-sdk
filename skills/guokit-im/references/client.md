@@ -36,7 +36,7 @@ HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <
 - `read_all`：所有会话未读清零（或重拉会话列表）。
 - `conversation_changed`：用 `conversation` 覆盖本地设置，不必看 `action`。按 `clear_seq` 删本地旧消息；
   `visible` 为 false 时把会话和它的全部消息一起删掉（本地已有 `seq > clear_seq` 的消息说明结果晚到，只清不删）。
-- `message_recalled`：本地有这个会话就用 `message` 替换那条（`type` 为 `recalled`），没有就忽略；撤回不可逆，旧版本不再覆盖；是最后一条时换会话预览，清掉已下载的图片与语音。
+- `message_recalled`：本地有这个会话就用 `message` 替换那条（`type` 为 `recalled`），没有就忽略；撤回不可逆，旧版本不再覆盖；是最后一条时换会话预览，清掉已下载的附件。
 - `peer_read`：对方读到 `peer_read_seq`，只进不退。
 - `typing`：`from` 正在输入，`expires_in` 秒后或收到他的消息时收起。自己输入时最多每 3 秒调一次 `POST /conversations/{id}/typing`。
 
@@ -57,6 +57,12 @@ HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <
 收到的上传图 content 带 `url`（约 24 小时有效）：本地按 `attachment_id` 缓存图片文件；加载失败（403/404）时重新拉该消息拿新 `url`。
 
 语音：`POST /upload` 带表单字段 `kind=voice`（只收 m4a / mp3，≤2MB）→ 发 `{"type":"voice","content":{"attachment_id":…,"ticket":"…","duration":3}}`（1–60 的整数秒）。收到的 content 为 `{attachment_id, duration, size, mime, url}`，`url` 规则同图片。
+
+文件：`features.file_max_mb` 大于 0 才显示入口。`POST /upload` 带 `kind=file`，multipart 的 `filename` 带上真实扩展名（pdf / docx / xlsx / pptx / doc / xls / ppt / wps / et / dps / txt / csv / md / log / zip / rar，要和内容对得上）→ 发 `{"type":"file","content":{"attachment_id":…,"ticket":"…","name":"合同.pdf"}}`。收到的 content 为 `{attachment_id, name, size, mime, url}`，`url` 是强制下载的地址。会话预览 `[文件] 名字`（合计 50 字）。
+
+视频：`features.video_max_mb` 大于 0 才显示入口。先转成 H.264 的 MP4，`POST /upload` 带 `kind=video`（只收 mp4 / mov）→ 发 `{"type":"video","content":{"attachment_id":…,"ticket":"…","duration":12,"width":1080,"height":1920}}`（1–3600 的整数秒）。封面可选：另传一张图片，多带 `cover_attachment_id` 与 `cover_ticket`，没有就不带这两个键（不要写 null）。收到的 content 为 `{attachment_id, duration, width, height, size, mime, cover_attachment_id, url, cover_url}`，没有封面时 `cover_url` 为空串。放不了的（多为 HEVC）给下载链接。会话预览 `[视频]`。
+
+上传文件、视频把超时放宽到几分钟；传好的 `attachment_id` 与 `ticket` 可以反复用，发消息失败重试时不要再传。
 
 撤回：`GET /me` 的 `features.recall_minutes` 大于 0 且在时限内才显示「撤回」，调 `POST /messages/{id}/recall`，`IM_RECALL_NOT_ALLOWED` 直接显示 `message`。已读：`features.read_receipt` 为真时，自己发的 `seq <= peer_read_seq`（会话列表项）的消息显示「已读」。
 

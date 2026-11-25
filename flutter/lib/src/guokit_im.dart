@@ -66,6 +66,7 @@ class GuokitIm {
   final _connection = StreamController<ImConnectionState>.broadcast();
   final _kickedOut = StreamController<void>.broadcast();
   final _typing = StreamController<ImTyping>.broadcast();
+  final _sendProgress = StreamController<ImSendProgress>.broadcast();
 
   /// 正在输入的会话 → 到期计时器。
   final Map<int, Timer> _typingTimers = {};
@@ -107,8 +108,8 @@ class GuokitIm {
   /// 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的、已撤回的不走这里。
   Stream<ImMessage> get onNewMessage => _newMessage.stream;
 
-  /// 本地消息变化：发送中 → 成功 / 失败 / 被拒收；图片、语音换新链接；
-  /// 变成已撤回（[ImMessage.isRecalled]，不分本人与对方，App 在这里清掉已下载的图片、语音）。
+  /// 本地消息变化：发送中 → 成功 / 失败 / 被拒收；图片、语音、文件、视频换新链接；
+  /// 变成已撤回（[ImMessage.isRecalled]，不分本人与对方，App 在这里清掉已下载的附件）。
   Stream<ImMessage> get onMessageUpdated => _messageUpdated.stream;
 
   /// 会话列表快照：置顶会话在前（按置顶时间倒序），其余按最后消息时间倒序。
@@ -125,6 +126,10 @@ class GuokitIm {
 
   /// 对方「正在输入」的变化；约 6 秒没有新的、或收到他的消息时自动收起。
   Stream<ImTyping> get onTyping => _typing.stream;
+
+  /// 图片、语音、文件、视频的上传进度（不含视频封面），只报正在传的；结果看 [onMessageUpdated]。
+  /// 换令牌重传时从头计。Flutter Web 上会直接跳到 100%：浏览器里先读完整个请求体才发。
+  Stream<ImSendProgress> get onSendProgress => _sendProgress.stream;
 
   /// 同步队列排空时完成。
   @visibleForTesting
@@ -145,7 +150,7 @@ class GuokitIm {
       }
       return;
     }
-    _session++;
+    final session = ++_session;
     _authRetries = 0;
     await _store.open(userId); // 打开失败直接抛，状态保持未登录
     _me = userId;
@@ -172,6 +177,9 @@ class GuokitIm {
       onUpdated: _messageUpdated.add,
       onSnapshot: _emitSnapshot,
       onKickedOut: _kick,
+      onProgress: (p) {
+        if (session == _session) _sendProgress.add(p);
+      },
     );
     await _emitSnapshot(forceTotal: true);
     await _connect();
@@ -228,6 +236,7 @@ class GuokitIm {
       _connection,
       _kickedOut,
       _typing,
+      _sendProgress,
     ]) {
       await c.close();
     }
@@ -366,7 +375,7 @@ class GuokitIm {
     await _emitSnapshot();
   });
 
-  /// 站点开关：能不能撤回、是否显示对方已读。登录后取一次即可。
+  /// 站点开关：能不能撤回、是否显示对方已读、能发多大的文件与视频。登录后取一次即可。
   Future<ImFeatures> features() => _call(() {
     _requireLogin();
     return _api.features();
@@ -554,6 +563,60 @@ class GuokitIm {
   }) =>
       _requireSender().sendVoiceBytes(to, bytes, duration, filename: filename);
 
+  /// 按文件路径发文件（iOS / Android），边读边传，不整个读进内存。[name] 缺省取路径里的文件名，
+  /// 扩展名要和内容对得上（可发的类型见接入文档 §5.6）。大小上限先看 [features] 的 `fileMaxMb`，0 = 不能发。
+  /// Web 上抛 [UnsupportedError]，请用 [sendFileBytes]。需要 IM 服务端 v1.19.0 及以上。
+  Future<ImMessage> sendFile(String to, String filePath, {String? name}) =>
+      _requireSender().sendFile(to, filePath, name: name);
+
+  /// 按字节发文件。[name] 要带扩展名。
+  Future<ImMessage> sendFileBytes(
+    String to,
+    Uint8List bytes, {
+    required String name,
+  }) => _requireSender().sendFileBytes(to, bytes, name: name);
+
+  /// 按文件路径发视频（iOS / Android），边读边传。只收 mp4 与 mov，发送前请转成 H.264 的 MP4，
+  /// HEVC（iPhone 默认拍的）很多浏览器放不了。大小上限先看 [features] 的 `videoMaxMb`，0 = 不能发。
+  ///
+  /// [duration] 1 秒–1 小时，[width] / [height] 1–20000，越界抛 [ArgumentError]；[coverBytes] 是封面图片，由 App 自己截。
+  /// 封面只在内存里：还没传上去进程就退出的，重发时不带封面；服务端不收的封面直接不带。
+  /// Web 上抛 [UnsupportedError]，请用 [sendVideoBytes]。需要 IM 服务端 v1.19.0 及以上。
+  Future<ImMessage> sendVideo(
+    String to,
+    String filePath, {
+    required Duration duration,
+    required int width,
+    required int height,
+    Uint8List? coverBytes,
+  }) => _requireSender().sendVideo(
+    to,
+    filePath,
+    duration: duration,
+    width: width,
+    height: height,
+    coverBytes: coverBytes,
+  );
+
+  /// 按字节发视频。
+  Future<ImMessage> sendVideoBytes(
+    String to,
+    Uint8List bytes, {
+    required Duration duration,
+    required int width,
+    required int height,
+    Uint8List? coverBytes,
+    String filename = 'video.mp4',
+  }) => _requireSender().sendVideoBytes(
+    to,
+    bytes,
+    duration: duration,
+    width: width,
+    height: height,
+    coverBytes: coverBytes,
+    filename: filename,
+  );
+
   /// 发位置。
   Future<ImMessage> sendLocation(
     String to,
@@ -583,6 +646,18 @@ class GuokitIm {
   /// 语音可用地址，规则同 [imageUrl]；非语音返回 null。播放由 App 自己做。
   Future<String?> voiceUrl(ImMessage message) =>
       _requireSender().voiceUrl(message);
+
+  /// 文件下载地址（强制下载、带原文件名），规则同 [imageUrl]；非文件返回 null。下载由 App 自己做。
+  Future<String?> fileUrl(ImMessage message) =>
+      _requireSender().fileUrl(message);
+
+  /// 视频可用地址，规则同 [imageUrl]；非视频返回 null。播放由 App 自己做。
+  Future<String?> videoUrl(ImMessage message) =>
+      _requireSender().videoUrl(message);
+
+  /// 视频封面可用地址，规则同 [imageUrl]；非视频、没有封面返回 null。
+  Future<String?> videoCoverUrl(ImMessage message) =>
+      _requireSender().videoCoverUrl(message);
 
   // ---------------- 内部 ----------------
 

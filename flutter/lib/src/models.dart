@@ -145,7 +145,7 @@ class ImMessage {
   /// 是否当前用户发出（含本人在其他设备发出的）。
   final bool isSelf;
 
-  /// `text` / `image` / `voice` / `location` / `custom`，已撤回的为 `recalled`（见 [isRecalled]）。保留字符串，服务端将来加类型时不至于解析失败，
+  /// `text` / `image` / `voice` / `file` / `video` / `location` / `custom`，已撤回的为 `recalled`（见 [isRecalled]）。保留字符串，服务端将来加类型时不至于解析失败，
   /// App 遇到不认识的类型请兜底显示。
   final String type;
 
@@ -161,10 +161,10 @@ class ImMessage {
   /// 服务端时间（UTC）；本地未确认的消息为本机发送时刻。
   final DateTime createdAt;
 
-  /// 本设备发出的图片、语音的本地文件路径（io 端重发时重读用），其余为 null；撤回后清空（文件本身不删）。
+  /// 本设备发出的图片、语音、文件、视频的本地文件路径（io 端重发时重读用），其余为 null；撤回后清空（文件本身不删）。
   final String? localPath;
 
-  /// 上传的图片、语音（content 有 `attachment_id`）的临时链接是何时取得的（UTC），用来判断是否该重拉（spec §3.5）。
+  /// 上传的图片、语音、文件、视频（content 有 `attachment_id`）的临时链接是何时取得的（UTC），用来判断是否该重拉（spec §3.5）。
   /// 其余消息为 null。
   final DateTime? urlFetchedAt;
 
@@ -187,6 +187,19 @@ class ImMessage {
     final d = type == 'voice' ? content['duration'] : null;
     return d is num ? Duration(seconds: d.toInt()) : null;
   }
+
+  /// 视频时长，发送端上报；不是视频为 null。
+  Duration? get videoDuration {
+    final d = type == 'video' ? content['duration'] : null;
+    return d is num ? Duration(seconds: d.toInt()) : null;
+  }
+
+  /// 文件名；不是文件为 null。
+  String? get fileName => type == 'file' ? content['name'] as String? : null;
+
+  /// 文件、视频的字节数；其余类型为 null，本设备发出、还没上传完的也是 null。
+  int? get fileSize =>
+      type == 'file' || type == 'video' ? _intOrNull(content['size']) : null;
 
   /// 业务卡片（接入文档 §5.9）：custom 消息的 `content['data']['im_card']`；
   /// 不是 custom、没带卡片或卡片缺 `title` 时为 null，调用方退回显示 `desc`（格式由服务端发送时把关）。
@@ -392,8 +405,8 @@ class ImMessagePreview {
   final String from;
   final String type;
 
-  /// 预览文字：text 前 50 字，image `[图片]`，voice `[语音]`，location `[位置]`，custom 取 `desc`，
-  /// 已撤回 `[消息已撤回]`。
+  /// 预览文字：text 前 50 字，image `[图片]`，voice `[语音]`，file `[文件] 名字`（共 50 字以内），video `[视频]`，
+  /// location `[位置]`，custom 取 `desc`，已撤回 `[消息已撤回]`。
   final String preview;
   final DateTime createdAt;
 
@@ -580,13 +593,20 @@ class ImConversation {
 
 /// 站点开关（`GuokitIm.features`）。旧版服务端没有，全部按没开启。
 class ImFeatures {
-  const ImFeatures({required this.recallMinutes, required this.readReceipt});
+  const ImFeatures({
+    required this.recallMinutes,
+    required this.readReceipt,
+    this.fileMaxMb = 0,
+    this.videoMaxMb = 0,
+  });
 
   factory ImFeatures.fromServer(Map json) {
     final f = _map(json['features']);
     return ImFeatures(
       recallMinutes: _intOrNull(f['recall_minutes']) ?? 0,
       readReceipt: (f['read_receipt'] as bool?) ?? false,
+      fileMaxMb: _intOrNull(f['file_max_mb']) ?? 0,
+      videoMaxMb: _intOrNull(f['video_max_mb']) ?? 0,
     );
   }
 
@@ -595,6 +615,28 @@ class ImFeatures {
 
   /// 是否显示对方已读。
   final bool readReceipt;
+
+  /// 当前用户能发的文件大小上限（MB），0 = 不能发，不要显示「文件」。
+  final int fileMaxMb;
+
+  /// 当前用户能发的视频大小上限（MB），0 = 不能发，不要显示「视频」。
+  final int videoMaxMb;
+}
+
+/// 上传进度（`GuokitIm.onSendProgress`）。
+class ImSendProgress {
+  const ImSendProgress({
+    required this.clientMsgId,
+    required this.sent,
+    required this.total,
+  });
+
+  /// 哪条消息，对应 [ImMessage.clientMsgId]。
+  final String clientMsgId;
+
+  /// 已交给系统发送的字节数。等于 [total] 只表示发完了，服务端可能还在存，结果以消息状态为准。
+  final int sent;
+  final int total;
 }
 
 /// 「正在输入」的变化（`GuokitIm.onTyping`）。

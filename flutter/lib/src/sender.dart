@@ -1,15 +1,16 @@
-/// 发送（spec §3.5）：文本、图片与语音（路径 / 字节）、位置、自定义、重发，以及上传的图片、语音链接重拉。
+/// 发送（spec §3.5）：文本、图片、语音、文件与视频（路径 / 字节）、位置、自定义、重发，以及上传的附件链接重拉。
 ///
 /// 由门面在登录时构造，一次登录一个实例。所有 `send*` / [ImSender.resend] 都在终态（sent / failed / rejected）
 /// 完成，**发送失败不抛异常**，看返回消息的 `status` 与 `errorCode`。
 ///
 /// 除服务端错误码外，SDK 自己会写的 `errorCode`：
 /// - `NETWORK`：超时、断网（可重发）；`BAD_RESPONSE`：响应不是合法响应包；
-/// - `IMAGE_DECODE`：图片解不出宽高；`FILE_READ`：按路径读文件失败；`IMAGE_MISSING` / `VOICE_MISSING`：重发时原图 / 语音的字节已不在；
+/// - `IMAGE_DECODE`：图片解不出宽高；`FILE_READ`：按路径读文件失败；`IMAGE_MISSING` / `VOICE_MISSING` / `FILE_MISSING` / `VIDEO_MISSING`：重发时内容的字节已不在；
 /// - `KICKED_OUT`：换令牌时接入方 `tokenProvider` 抛了 [ImKickedOutException]（同时已发 `onKickedOut`）；
 /// - `UNKNOWN`：其他意外异常（`errorMessage` 为异常文本）。
 library;
 
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -56,6 +57,7 @@ class ImSender {
     required this.onUpdated,
     required this.onSnapshot,
     required this.onKickedOut,
+    required this.onProgress,
     this.imageSize = decodeImageSize,
   });
 
@@ -73,16 +75,22 @@ class ImSender {
   /// 走踢下线流程（发 `onKickedOut`、停止重连）。
   final void Function() onKickedOut;
 
+  /// 发 `onSendProgress`。
+  final void Function(ImSendProgress) onProgress;
+
   final ImImageSizeReader imageSize;
 
-  /// 上传的图片、语音链接超过这么久就重拉（服务端约 24 小时过期）。
+  /// 上传的附件链接超过这么久就重拉（服务端约 24 小时过期）。
   static const Duration urlMaxAge = Duration(hours: 20);
 
   static const _uuid = Uuid();
 
-  /// bytes 版图片、语音的原始字节，按 clientMsgId 保留到 sent / rejected（failed 时留着给重发）。
+  /// bytes 版附件的原始字节，按 clientMsgId 保留到 sent / rejected（failed 时留着给重发）。
   final Map<String, Uint8List> _bytes = {};
   final Map<String, String> _filenames = {};
+
+  /// 视频封面的字节，按 clientMsgId 保留到传上去为止；只在内存，进程重启后没有，重发就不带封面。
+  final Map<String, Uint8List> _covers = {};
 
   Future<ImMessage> sendText(String to, String text) =>
       _sendNew(to, 'text', {'text': text});
@@ -133,7 +141,7 @@ class ImSender {
       throw UnsupportedError('当前平台不能按路径读文件，请用 sendVoiceBytes');
     }
     return _sendNew(to, 'voice', {
-      'duration': voiceSeconds(duration),
+      'duration': _seconds(duration, 60, '语音'),
     }, localPath: filePath);
   }
 
@@ -144,18 +152,88 @@ class ImSender {
     Duration duration, {
     String filename = 'voice.m4a',
   }) {
-    final seconds = voiceSeconds(duration);
+    final seconds = _seconds(duration, 60, '语音');
     final cid = _uuid.v4();
     _bytes[cid] = bytes;
     _filenames[cid] = filename;
     return _sendNew(to, 'voice', {'duration': seconds}, clientMsgId: cid);
   }
 
-  /// 时长取整秒；不足 1 秒算 1 秒，超过 60 秒抛 [ArgumentError]。
-  static int voiceSeconds(Duration d) {
+  /// 按路径发文件（io 端），边读边传。[name] 缺省取路径里的文件名，扩展名要和内容对得上。重发时按 `localPath` 重读。
+  Future<ImMessage> sendFile(String to, String filePath, {String? name}) {
+    if (!canReadFiles) {
+      throw UnsupportedError('当前平台不能按路径读文件，请用 sendFileBytes');
+    }
+    return _sendNew(to, 'file', {
+      'name': name ?? p.basename(filePath),
+    }, localPath: filePath);
+  }
+
+  /// 按字节发文件（Web 必须用这个）。字节在内存里保留到终态，失败后可重发。
+  Future<ImMessage> sendFileBytes(
+    String to,
+    Uint8List bytes, {
+    required String name,
+  }) {
+    final cid = _uuid.v4();
+    _bytes[cid] = bytes;
+    return _sendNew(to, 'file', {'name': name}, clientMsgId: cid);
+  }
+
+  /// 按路径发视频（io 端），边读边传。[duration] 四舍五入到秒；[coverBytes] 是封面图片。重发时按 `localPath` 重读。
+  Future<ImMessage> sendVideo(
+    String to,
+    String filePath, {
+    required Duration duration,
+    required int width,
+    required int height,
+    Uint8List? coverBytes,
+  }) {
+    if (!canReadFiles) {
+      throw UnsupportedError('当前平台不能按路径读文件，请用 sendVideoBytes');
+    }
+    final content = _videoContent(duration, width, height);
+    final cid = _uuid.v4();
+    if (coverBytes != null) _covers[cid] = coverBytes;
+    return _sendNew(
+      to,
+      'video',
+      content,
+      clientMsgId: cid,
+      localPath: filePath,
+    );
+  }
+
+  /// 按字节发视频（Web 必须用这个）。字节在内存里保留到终态，失败后可重发。
+  Future<ImMessage> sendVideoBytes(
+    String to,
+    Uint8List bytes, {
+    required Duration duration,
+    required int width,
+    required int height,
+    Uint8List? coverBytes,
+    String filename = 'video.mp4',
+  }) {
+    final content = _videoContent(duration, width, height);
+    final cid = _uuid.v4();
+    _bytes[cid] = bytes;
+    _filenames[cid] = filename;
+    if (coverBytes != null) _covers[cid] = coverBytes;
+    return _sendNew(to, 'video', content, clientMsgId: cid);
+  }
+
+  static Map<String, dynamic> _videoContent(Duration d, int w, int h) {
+    if (w < 1 || w > 20000 || h < 1 || h > 20000) {
+      throw ArgumentError('视频宽高须为 1–20000（当前 $w×$h）');
+    }
+    return {'duration': _seconds(d, 3600, '视频'), 'width': w, 'height': h};
+  }
+
+  /// 时长取整秒；不足 1 秒算 1 秒，超过 [max] 秒抛 [ArgumentError]。
+  static int _seconds(Duration d, int max, String what) {
     final s = (d.inMilliseconds / 1000).round();
-    if (d <= Duration.zero || s > 60) {
-      throw ArgumentError.value(d, 'duration', '语音时长须在 60 秒以内');
+    if (d <= Duration.zero || s > max) {
+      throw ArgumentError.value(d, 'duration', '$what时长须在 $max 秒以内');
     }
     return s < 1 ? 1 : s;
   }
@@ -183,17 +261,34 @@ class ImSender {
   /// 未确认（发送中 / 失败）的上传图没有会话可重拉，返回上传时拿到的临时链接（约 24 小时有效）；
   /// 按路径发的图在本机优先用 `localPath` 显示。
   Future<String?> imageUrl(ImMessage message) async =>
-      message.type == 'image' ? _mediaUrl(message) : null;
+      message.type == 'image' ? _mediaUrl(message, 'url') : null;
 
   /// 语音可用地址，规则同 [imageUrl]；非语音 null。
   Future<String?> voiceUrl(ImMessage message) async =>
-      message.type == 'voice' ? _mediaUrl(message) : null;
+      message.type == 'voice' ? _mediaUrl(message, 'url') : null;
 
-  Future<String?> _mediaUrl(ImMessage message) async {
+  /// 文件下载地址（下载下来是原文件名），规则同 [imageUrl]；非文件 null。
+  Future<String?> fileUrl(ImMessage message) async =>
+      message.type == 'file' ? _mediaUrl(message, 'url') : null;
+
+  /// 视频可用地址，规则同 [imageUrl]；非视频 null。
+  Future<String?> videoUrl(ImMessage message) async =>
+      message.type == 'video' ? _mediaUrl(message, 'url') : null;
+
+  /// 视频封面可用地址，规则同 [imageUrl]；非视频、没有封面 null。
+  Future<String?> videoCoverUrl(ImMessage message) async {
+    // 没有封面时服务端给的 cover_attachment_id 是 0、cover_url 是空串，不能当成链接过期去重拉。
+    final cover = message.type == 'video'
+        ? message.content['cover_attachment_id']
+        : null;
+    return cover == null || cover == 0 ? null : _mediaUrl(message, 'cover_url');
+  }
+
+  Future<String?> _mediaUrl(ImMessage message, String key) async {
     final m =
         (message.id == null ? null : await store.getMessageById(message.id!)) ??
         message;
-    final url = m.content['url'] as String?;
+    final url = m.content[key] as String?;
     if (!m.content.containsKey('attachment_id')) return url;
     final convId = m.conversationId;
     final seq = m.seq;
@@ -213,7 +308,7 @@ class ImSender {
           : await store.getMessageById(m.id!);
       if (latest != null) {
         onUpdated(latest);
-        return latest.content['url'] as String?;
+        return latest.content[key] as String?;
       }
     } on ImKickedOutException {
       onKickedOut();
@@ -268,13 +363,17 @@ class ImSender {
     try {
       if (_media.containsKey(msg.type) &&
           !msg.content.containsKey('attachment_id')) {
+        msg = await _uploadCover(msg); // 分两步各自落库：正文失败时，传好的封面不丢
         msg = await _upload(msg);
       }
       final resp = await api.sendMessage(
         to: msg.to,
         type: msg.type,
         content: switch (_media[msg.type]) {
-          final keys? => {for (final k in keys) k: msg.content[k]},
+          final keys? => {
+            for (final k in keys)
+              if (msg.content[k] != null) k: msg.content[k],
+          },
           null => msg.content,
         },
         clientMsgId: msg.clientMsgId,
@@ -310,50 +409,139 @@ class ImSender {
   static const _media = {
     'image': ['attachment_id', 'ticket', 'width', 'height'],
     'voice': ['attachment_id', 'ticket', 'duration'],
+    'file': ['attachment_id', 'ticket', 'name'],
+    'video': [
+      'attachment_id',
+      'ticket',
+      'duration',
+      'width',
+      'height',
+      'cover_attachment_id',
+      'cover_ticket',
+    ],
   };
 
-  /// 取字节 →（图片解宽高）→ 上传；成功后把附件 id、凭证等写回本地，重发时不再上传。
+  /// 内容的字节已不在、又没有本地路径可读时的错误。
+  static const _missing = {
+    'image': ('IMAGE_MISSING', '原图已不在内存中，无法重发'),
+    'voice': ('VOICE_MISSING', '语音已不在内存中，无法重发'),
+    'file': ('FILE_MISSING', '文件已不在内存中，无法重发'),
+    'video': ('VIDEO_MISSING', '视频已不在内存中，无法重发'),
+  };
+
+  static const _defaultNames = {
+    'image': 'image.jpg',
+    'voice': 'voice.m4a',
+    'video': 'video.mp4',
+  };
+
+  /// 上传视频封面，成功后写回本地，重发时不再传。没有封面、或已传过的原样返回。
+  /// 服务端不收这张封面就不带封面继续发（再试也一样）；网络等其他失败照常上抛，重发时再传。
+  Future<ImMessage> _uploadCover(ImMessage msg) async {
+    final cid = msg.clientMsgId;
+    final cover = _covers[cid];
+    if (cover == null) return msg;
+    try {
+      final up = await api.upload(() async => _bytesBody(cover), 'cover.jpg');
+      final withCover = msg.copyWith(
+        content: {
+          ...msg.content,
+          'cover_attachment_id': up.attachmentId,
+          'cover_ticket': up.ticket,
+          'cover_url': up.url,
+        },
+      );
+      final saved = (await store.upsertMessage(withCover)).message;
+      _covers.remove(cid);
+      return saved;
+    } on ImApiException catch (e) {
+      if (e.code != 'VALIDATION') rethrow;
+      _covers.remove(cid);
+      return msg;
+    }
+  }
+
+  /// 取内容 →（图片解宽高）→ 上传；成功后把附件 id、凭证等写回本地，重发时不再上传。
+  /// 按路径发的文件、视频边读边传，其余整个读进内存。
   Future<ImMessage> _upload(ImMessage msg) async {
     final cid = msg.clientMsgId;
-    final voice = msg.type == 'voice';
+    final type = msg.type;
+    final path = canReadFiles ? msg.localPath : null;
+    final streamed = type == 'file' || type == 'video';
     var bytes = _bytes[cid];
     if (bytes == null) {
-      final path = msg.localPath;
-      if (path == null || !canReadFiles) {
-        throw voice
-            ? _LocalFailure('VOICE_MISSING', '语音已不在内存中，无法重发')
-            : _LocalFailure('IMAGE_MISSING', '原图已不在内存中，无法重发');
+      if (path == null) {
+        final (code, message) = _missing[type]!;
+        throw _LocalFailure(code, message);
       }
-      try {
-        bytes = await readFileBytes(path);
-      } catch (e) {
-        throw _LocalFailure('FILE_READ', e.toString());
-      }
+      if (!streamed) bytes = await _read(() => readFileBytes(path));
     }
     ({int width, int height})? size;
-    if (!voice) {
+    if (type == 'image') {
       try {
-        size = await imageSize(bytes);
+        size = await imageSize(bytes!);
       } catch (e) {
         throw _LocalFailure('IMAGE_DECODE', '无法识别图片：$e');
       }
     }
     final filename =
+        msg.fileName ??
         _filenames[cid] ??
-        (msg.localPath == null
-            ? (voice ? 'voice.m4a' : 'image.jpg')
-            : p.basename(msg.localPath!));
-    final up = await api.upload(bytes, filename, kind: msg.type);
-    final withAttachment = msg.copyWith(
-      content: {
-        ...msg.content,
-        'attachment_id': up.attachmentId,
-        'ticket': up.ticket,
-        if (size != null) ...{'width': size.width, 'height': size.height},
-        'url': up.url,
-      },
-    );
-    return (await store.upsertMessage(withAttachment)).message;
+        (path == null ? _defaultNames[type]! : p.basename(path));
+    var total = 0;
+    var active = true; // 超时后底层请求还在传，不再报它的进度
+    try {
+      final up = await api.upload(
+        () async {
+          final body = bytes == null
+              ? (
+                  length: await _read(() => fileLength(path!)),
+                  stream: openFile(path!),
+                )
+              : _bytesBody(bytes);
+          total = body.length;
+          return body;
+        },
+        filename,
+        kind: type,
+        onProgress: (sent, total) {
+          if (!active) return;
+          onProgress(
+            ImSendProgress(clientMsgId: cid, sent: sent, total: total),
+          );
+        },
+      );
+      final withAttachment = msg.copyWith(
+        content: {
+          ...msg.content,
+          'attachment_id': up.attachmentId,
+          'ticket': up.ticket,
+          if (size != null) ...{'width': size.width, 'height': size.height},
+          if (streamed) 'size': total,
+          'url': up.url,
+        },
+      );
+      return (await store.upsertMessage(withAttachment)).message;
+    } finally {
+      active = false;
+    }
+  }
+
+  static ImUploadBody _bytesBody(Uint8List bytes) => (
+    length: bytes.length,
+    stream: Stream.fromIterable([
+      // 分块只为进度看得出变化，不复制字节
+      for (var i = 0; i < bytes.length; i += 65536)
+        Uint8List.sublistView(bytes, i, min(i + 65536, bytes.length)),
+    ]),
+  );
+
+  static Future<T> _read<T>(Future<T> Function() f) async {
+    try {
+      return await f();
+    } catch (e) {
+      throw _LocalFailure('FILE_READ', e.toString());
+    }
   }
 
   Future<ImMessage> _finish(
@@ -374,5 +562,6 @@ class ImSender {
   void _forget(String cid) {
     _bytes.remove(cid);
     _filenames.remove(cid);
+    _covers.remove(cid);
   }
 }
