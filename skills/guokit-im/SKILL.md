@@ -15,7 +15,7 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 
 ## 先看有没有 SDK
 
-- **Flutter 客户端**：用 `guokit_im`（本仓库 `flutter/`），令牌续期、断线对账、本地缓存、发送重试与去重、图片链接重拉都已包好，下面客户端那半不用自己写。
+- **Flutter 客户端**：用 `guokit_im`（本仓库 `flutter/`），令牌续期、断线对账、本地缓存、发送重试与去重、图片与语音链接重拉、撤回与已读同步都已包好，下面客户端那半不用自己写。
 - **PHP 后端**：用 `guokit/im`（本仓库根 `composer.json`，代码在 `php/`），含回调验签。
 - 其他语言暂无 SDK，照本 skill 与 references 直接调接口。
 
@@ -26,12 +26,12 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 2. 存量用户 `POST /server/users/batch` 批量导入（每批 ≤100）；注册、改昵称头像时 `PUT /server/users/{user_id}`。user_id 用自家用户主键字符串，满足 `[A-Za-z0-9_-]{1,64}`。
 3. 用户登录时 `POST /server/users/{user_id}/token`，把 `token` 与 `expires_at` 交给客户端；客户端令牌失效时找后端换。
 4. 自家封号 → `PATCH /server/users/{user_id}` `{"status":0}`；退出全部设备 → `POST .../kick`；自家拉黑 → `PUT /server/users/{user_id}/blocks/{target}`。
-5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送。站点接了微信渠道、要让坐席认出微信用户是哪个会员的，再实现 `resolve_user`（同步，3 秒内回）。
+5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送；message_recalled 用来撤掉已发的推送、更新归档（可能比 after_send 先到，按 `message_id` 判断）。站点接了微信渠道、要让坐席认出微信用户是哪个会员的，再实现 `resolve_user`（同步，3 秒内回）。
 
 客户端：
 1. 拿到令牌后连 `wss://<IM 域名>/api/im/v1/connect/websocket`（Centrifuge 协议，用官方 SDK：Flutter `centrifuge`、Web `centrifuge`）。
 2. 每次 connected（首连与重连）都做一次对账：拉会话列表，落后的会话按 `after_seq` 补拉。
-3. 推送从服务端订阅的 publication 事件收：`message` / `read` / `read_all`。
+3. 推送从服务端订阅的 publication 事件收：`message` / `read` / `read_all` / `conversation_changed` / `message_recalled` / `peer_read` / `typing`，不认识的忽略。
 4. 发消息、标已读、上传全走 HTTP。
 
 详细写法：后端看 [references/server.md](references/server.md)，客户端看 [references/client.md](references/client.md)。
@@ -54,6 +54,9 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 14. **收到 `read_all` 要把所有会话未读清零**（或重拉会话列表），它不会附带各会话的 `read_seq`。
 15. **`IM_BLOCKED` 是业务结果不是故障**：对方拉黑了发送者，提示「消息已发出，但被对方拒收了」，不要重试。
 16. **平台客服是固定联系人 `@cs`**：只能由用户本人从客户端发给它；服务端代发的 from / to 不能是 `@cs`，也不能拉黑 `@cs`。它的消息带 `sender_role`，`bot` 的要向用户标识为 AI 生成。
+17. **撤回不可逆**：`type` 变成 `recalled` 的消息，之后拿到的旧版本（在途的翻历史、迟到的发送响应）不要再覆盖回去；撤回的是最后一条时会话预览也要换。撤回不产生新 seq，离线的靠 `GET /recalls` 补，不能靠 `after_seq`。
+18. **不认识的消息类型要兜底显示**，不要报错：`type` 将来还会增加取值（`voice`、`recalled` 就是后加的）。
+19. **对方已读只由 `POST /conversations/{id}/read` 推进**，一键清未读、清空、发消息都不算；打开会话时不要因为本地未读是 0 就不调。
 
 ## 选型提示
 

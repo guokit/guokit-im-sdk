@@ -2,7 +2,7 @@
 
 guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库是它的**公开接入资料**：SDK、接口文档、OpenAPI 规范、给 AI 编码助手用的接入说明（`llms.txt` 与 Agent Skill）。
 
-需要 IM 服务端 **≥ v1.8.0**。其中机器人与网页客服需 ≥ v1.12.0，工单进展与留言需 ≥ v1.13.0，微信渠道需 ≥ v1.14.0（关注与菜单自动回复 ≥ v1.15.0，识别微信用户是哪个会员 `resolve_user` ≥ v1.16.0）。
+需要 IM 服务端 **≥ v1.8.0**。其中机器人与网页客服需 ≥ v1.12.0，工单进展与留言需 ≥ v1.13.0，微信渠道需 ≥ v1.14.0（关注与菜单自动回复 ≥ v1.15.0，识别微信用户是哪个会员 `resolve_user` ≥ v1.16.0），撤回、语音、对方已读、正在输入需 ≥ v1.17.0。
 
 | 内容 | 位置 |
 |---|---|
@@ -14,19 +14,19 @@ guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库�
 
 ## SDK
 
-两个 SDK 共用仓库版本号，当前 `v0.7.0`（变更见 [CHANGELOG.md](CHANGELOG.md)），先以 git 依赖分发（接口稳定后再发 pub.dev / Packagist）：
+两个 SDK 共用仓库版本号，当前 `v0.8.0`（变更见 [CHANGELOG.md](CHANGELOG.md)），先以 git 依赖分发（接口稳定后再发 pub.dev / Packagist）：
 
 ```yaml
 # Flutter：pubspec.yaml
 dependencies:
   guokit_im:
-    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.7.0 }
+    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.8.0 }
 ```
 
 ```json
 // PHP：composer.json
 "repositories": [{ "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }],
-"require": { "guokit/im": "^0.7" }
+"require": { "guokit/im": "^0.8" }
 ```
 
 ```php
@@ -49,7 +49,7 @@ await im.sendText('u1002', '你好');
 接入方后端 ──X-Api-Key──▶ /api/im/v1/server/*   导入用户、签令牌、封禁、黑名单、代发
 客户端     ──Bearer────▶ /api/im/v1/*          发消息、会话、已读、上传、黑名单
 客户端     ◀─WebSocket── /api/im/v1/connect/websocket   只收推送（Centrifuge 协议）
-接入方后端 ◀─签名回调──  before_send（同步审核） / after_send（异步，离线推送） / resolve_user（同步，微信用户是哪个会员）
+接入方后端 ◀─签名回调──  before_send（同步审核） / after_send（异步，离线推送） / message_recalled（异步，撤回） / resolve_user（同步，微信用户是哪个会员）
 ```
 
 1. **拿 Key**：IM 后台「IM → 接入应用」新建，复制 API Key（只显示一次），放服务端配置，**不要下发客户端**。

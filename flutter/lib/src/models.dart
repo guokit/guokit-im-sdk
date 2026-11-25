@@ -145,7 +145,8 @@ class ImMessage {
   /// 是否当前用户发出（含本人在其他设备发出的）。
   final bool isSelf;
 
-  /// `text` / `image` / `location` / `custom`。保留字符串，服务端将来加类型时不至于解析失败。
+  /// `text` / `image` / `voice` / `location` / `custom`，已撤回的为 `recalled`（见 [isRecalled]）。保留字符串，服务端将来加类型时不至于解析失败，
+  /// App 遇到不认识的类型请兜底显示。
   final String type;
 
   /// 按 [type] 的内容，形状见接入文档 §5.1。
@@ -160,10 +161,10 @@ class ImMessage {
   /// 服务端时间（UTC）；本地未确认的消息为本机发送时刻。
   final DateTime createdAt;
 
-  /// 本设备发出的图片的本地文件路径（io 端重发时重读用），其余为 null。
+  /// 本设备发出的图片、语音的本地文件路径（io 端重发时重读用），其余为 null；撤回后清空（文件本身不删）。
   final String? localPath;
 
-  /// 上传图（content 有 `attachment_id`）的临时链接是何时取得的（UTC），用来判断是否该重拉（spec §3.5）。
+  /// 上传的图片、语音（content 有 `attachment_id`）的临时链接是何时取得的（UTC），用来判断是否该重拉（spec §3.5）。
   /// 其余消息为 null。
   final DateTime? urlFetchedAt;
 
@@ -174,6 +175,18 @@ class ImMessage {
 
   /// 是否机器人发的。内容由 AI 生成，**界面上要向用户标识**（如「AI 生成」）。
   bool get isBot => senderRole == 'bot';
+
+  /// 是否已撤回。原文已不在，界面显示「消息已撤回」即可；撤回不可逆。
+  bool get isRecalled => type == 'recalled';
+
+  /// 谁撤回的：`sender` 发送者 / `agent` 坐席 / `server` 接入方；没撤回为 null。
+  String? get recalledBy => isRecalled ? content['by'] as String? : null;
+
+  /// 语音时长；不是语音为 null。
+  Duration? get voiceDuration {
+    final d = type == 'voice' ? content['duration'] : null;
+    return d is num ? Duration(seconds: d.toInt()) : null;
+  }
 
   /// 业务卡片（接入文档 §5.9）：custom 消息的 `content['data']['im_card']`；
   /// 不是 custom、没带卡片或卡片缺 `title` 时为 null，调用方退回显示 `desc`（格式由服务端发送时把关）。
@@ -379,7 +392,8 @@ class ImMessagePreview {
   final String from;
   final String type;
 
-  /// 预览文字：text 前 50 字，image `[图片]`，location `[位置]`，custom 取 `desc`。
+  /// 预览文字：text 前 50 字，image `[图片]`，voice `[语音]`，location `[位置]`，custom 取 `desc`，
+  /// 已撤回 `[消息已撤回]`。
   final String preview;
   final DateTime createdAt;
 
@@ -441,6 +455,7 @@ class ImConversation {
     this.pinnedAt,
     this.muted = false,
     this.clearSeq = 0,
+    this.peerReadSeq,
   });
 
   /// 解析会话列表的一项（接入文档 §5.2 / §10.2）。服务端的 `unread` 字段不读，见 [unread]。
@@ -462,6 +477,7 @@ class ImConversation {
           : parseCst(json['pinned_at'] as String),
       muted: (json['muted'] as bool?) ?? false,
       clearSeq: _intOrNull(json['clear_seq']) ?? 0,
+      peerReadSeq: _intOrNull(json['peer_read_seq']),
     );
   }
 
@@ -478,6 +494,7 @@ class ImConversation {
       pinnedAt: json['pinned_at'] == null ? null : _fromMs(json['pinned_at']),
       muted: (json['muted'] as bool?) ?? false,
       clearSeq: _intOrNull(json['clear_seq']) ?? 0,
+      peerReadSeq: _intOrNull(json['peer_read_seq']),
     );
   }
 
@@ -504,6 +521,10 @@ class ImConversation {
   /// 本人清空到的序号，`seq <= clearSeq` 的消息看不到；没清空过为 0。
   final int clearSeq;
 
+  /// 对方读到哪条：自己发的 `seq <= peerReadSeq` 的消息即对方已读。
+  /// 站点没开启对方已读、旧版服务端、客服会话为 null，不要显示「已读 / 未读」。
+  final int? peerReadSeq;
+
   bool get isService => type == 'service';
 
   bool get pinned => pinnedAt != null;
@@ -520,6 +541,7 @@ class ImConversation {
     Object? pinnedAt = _unset,
     bool? muted,
     int? clearSeq,
+    Object? peerReadSeq = _unset,
   }) => ImConversation(
     id: id,
     type: type ?? this.type,
@@ -535,6 +557,9 @@ class ImConversation {
         : pinnedAt as DateTime?,
     muted: muted ?? this.muted,
     clearSeq: clearSeq ?? this.clearSeq,
+    peerReadSeq: identical(peerReadSeq, _unset)
+        ? this.peerReadSeq
+        : peerReadSeq as int?,
   );
 
   /// SDK 内部格式（存储层用），时间为 UTC 毫秒时间戳。
@@ -549,7 +574,44 @@ class ImConversation {
     'pinned_at': pinnedAt?.millisecondsSinceEpoch,
     'muted': muted,
     'clear_seq': clearSeq,
+    'peer_read_seq': peerReadSeq,
   };
+}
+
+/// 站点开关（`GuokitIm.features`）。旧版服务端没有，全部按没开启。
+class ImFeatures {
+  const ImFeatures({required this.recallMinutes, required this.readReceipt});
+
+  factory ImFeatures.fromServer(Map json) {
+    final f = _map(json['features']);
+    return ImFeatures(
+      recallMinutes: _intOrNull(f['recall_minutes']) ?? 0,
+      readReceipt: (f['read_receipt'] as bool?) ?? false,
+    );
+  }
+
+  /// 撤回时限（分钟），0 = 没开启，不要显示「撤回」。
+  final int recallMinutes;
+
+  /// 是否显示对方已读。
+  final bool readReceipt;
+}
+
+/// 「正在输入」的变化（`GuokitIm.onTyping`）。
+class ImTyping {
+  const ImTyping({
+    required this.conversationId,
+    required this.from,
+    required this.active,
+  });
+
+  final int conversationId;
+
+  /// 正在输入的人；客服会话里为 `@cs`。
+  final String from;
+
+  /// true 显示「正在输入」，false 收起（过期，或收到了他的消息）。
+  final bool active;
 }
 
 /// 黑名单的一项。只有 user_id，昵称头像请用 App 自家资料展示。

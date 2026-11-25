@@ -65,6 +65,17 @@ class GuokitIm {
   final _totalUnreadCtrl = StreamController<int>.broadcast();
   final _connection = StreamController<ImConnectionState>.broadcast();
   final _kickedOut = StreamController<void>.broadcast();
+  final _typing = StreamController<ImTyping>.broadcast();
+
+  /// 正在输入的会话 → 到期计时器。
+  final Map<int, Timer> _typingTimers = {};
+
+  /// 会话 → 上次告诉对方「正在输入」的时间，按 3 秒节流。
+  final Map<int, DateTime> _typingSent = {};
+
+  /// 本次登录已用标已读上报到的 seq。不能只看 readSeq：一键清未读会把它推满，
+  /// 之后打开聊天若不再上报，对方就永远看不到「已读」。
+  final Map<int, int> _reportedRead = {};
 
   String? _me;
   int _totalUnread = 0;
@@ -93,10 +104,11 @@ class GuokitIm {
 
   ImConnectionState get connectionState => _state;
 
-  /// 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的不走这里。
+  /// 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的、已撤回的不走这里。
   Stream<ImMessage> get onNewMessage => _newMessage.stream;
 
-  /// 本地消息变化：发送中 → 成功 / 失败 / 被拒收；图片换新链接。
+  /// 本地消息变化：发送中 → 成功 / 失败 / 被拒收；图片、语音换新链接；
+  /// 变成已撤回（[ImMessage.isRecalled]，不分本人与对方，App 在这里清掉已下载的图片、语音）。
   Stream<ImMessage> get onMessageUpdated => _messageUpdated.stream;
 
   /// 会话列表快照：置顶会话在前（按置顶时间倒序），其余按最后消息时间倒序。
@@ -110,6 +122,9 @@ class GuokitIm {
 
   /// 被封禁或踢下线。SDK 已停止重连，App 应走登出。
   Stream<void> get onKickedOut => _kickedOut.stream;
+
+  /// 对方「正在输入」的变化；约 6 秒没有新的、或收到他的消息时自动收起。
+  Stream<ImTyping> get onTyping => _typing.stream;
 
   /// 同步队列排空时完成。
   @visibleForTesting
@@ -138,12 +153,16 @@ class GuokitIm {
       api: _api,
       store: _store,
       me: userId,
-      onNewMessage: _newMessage.add,
+      onNewMessage: (m) {
+        if (!m.isSelf) _stopTyping(m.conversationId!, m.from);
+        _newMessage.add(m);
+      },
       onMessageUpdated: _messageUpdated.add,
       onChanged: _emitSnapshot,
       onError: (e) {
         if (e is ImKickedOutException) _kick();
       },
+      onTyping: _showTyping,
     );
     _sender = ImSender(
       api: _api,
@@ -166,6 +185,12 @@ class GuokitIm {
     _sync?.close();
     _sync = null;
     _sender = null;
+    for (final t in _typingTimers.values) {
+      t.cancel();
+    }
+    _typingTimers.clear();
+    _typingSent.clear();
+    _reportedRead.clear();
     await _rtSub?.cancel();
     _rtSub = null;
     final rt = _rt;
@@ -202,6 +227,7 @@ class GuokitIm {
       _totalUnreadCtrl,
       _connection,
       _kickedOut,
+      _typing,
     ]) {
       await c.close();
     }
@@ -323,14 +349,62 @@ class GuokitIm {
   }
 
   /// 标已读到该会话当前最大 seq，更新服务端并即时更新本地未读。
+  /// 打开会话、会话打开着时收到新消息都要调：对方的「已读」只由它推进。
   Future<void> markRead(int conversationId) => _call(() async {
     _requireLogin();
     final conv = await _store.getConversation(conversationId);
-    if (conv == null || conv.readSeq >= conv.maxSeq) return;
+    if (conv == null ||
+        (conv.readSeq >= conv.maxSeq &&
+            (_reportedRead[conversationId] ?? 0) >= conv.maxSeq)) {
+      return;
+    }
+    final session = _session;
     final r = await _api.markRead(conversationId, conv.maxSeq);
+    if (session != _session) return;
+    _reportedRead[conversationId] = conv.maxSeq;
     await _store.setReadSeq(conversationId, r.readSeq);
     await _emitSnapshot();
   });
+
+  /// 站点开关：能不能撤回、是否显示对方已读。登录后取一次即可。
+  Future<ImFeatures> features() => _call(() {
+    _requireLogin();
+    return _api.features();
+  });
+
+  /// 撤回自己发的一条消息，双方都变成「已撤回」，经 [onMessageUpdated] 发出。需要 IM 服务端 v1.17.0 及以上。
+  ///
+  /// 未确认（发送中 / 失败）或别人发的抛 [ArgumentError]；没开启、超过时限抛 [ImApiException]
+  /// （`IM_RECALL_NOT_ALLOWED`，直接显示 `message`）。与 `send*` 不同，失败会抛。
+  Future<void> recall(ImMessage message) {
+    final id = message.id;
+    if (id == null || !message.isSelf) {
+      throw ArgumentError('只能撤回自己已发送的消息');
+    }
+    return _call(() async {
+      _requireLogin();
+      final sync = _sync!;
+      await sync.applyRecall(await _api.recall(id));
+    });
+  }
+
+  /// 告诉对方自己正在输入，输入框内容变化时调即可，SDK 按会话 3 秒节流。失败静默（旧服务端、断网、超频）。
+  Future<void> sendTyping(int conversationId) async {
+    _requireLogin();
+    final now = DateTime.now();
+    final last = _typingSent[conversationId];
+    if (last != null && now.difference(last) < const Duration(seconds: 3)) {
+      return;
+    }
+    _typingSent[conversationId] = now;
+    try {
+      await _api.typing(conversationId);
+    } on ImKickedOutException {
+      _kick();
+    } catch (_) {
+      // 提示性的，失败不打扰。
+    }
+  }
 
   /// 一键清全部未读。
   Future<void> markAllRead() => _call(() async {
@@ -466,6 +540,20 @@ class GuokitIm {
     String filename = 'image.jpg',
   }) => _requireSender().sendImageBytes(to, bytes, filename: filename);
 
+  /// 按文件路径发语音（iOS / Android），m4a（AAC）或 mp3，60 秒、2MB 以内。录音由 App 自己做。
+  /// Web 上抛 [UnsupportedError]，请用 [sendVoiceBytes]。需要 IM 服务端 v1.17.0 及以上。
+  Future<ImMessage> sendVoice(String to, String filePath, Duration duration) =>
+      _requireSender().sendVoice(to, filePath, duration);
+
+  /// 按字节发语音。
+  Future<ImMessage> sendVoiceBytes(
+    String to,
+    Uint8List bytes,
+    Duration duration, {
+    String filename = 'voice.m4a',
+  }) =>
+      _requireSender().sendVoiceBytes(to, bytes, duration, filename: filename);
+
   /// 发位置。
   Future<ImMessage> sendLocation(
     String to,
@@ -492,7 +580,31 @@ class GuokitIm {
   Future<String?> imageUrl(ImMessage message) =>
       _requireSender().imageUrl(message);
 
+  /// 语音可用地址，规则同 [imageUrl]；非语音返回 null。播放由 App 自己做。
+  Future<String?> voiceUrl(ImMessage message) =>
+      _requireSender().voiceUrl(message);
+
   // ---------------- 内部 ----------------
+
+  void _showTyping(int conversationId, String from, Duration ttl) {
+    _typingTimers.remove(conversationId)?.cancel();
+    _typingTimers[conversationId] = Timer(
+      ttl,
+      () => _stopTyping(conversationId, from),
+    );
+    _typing.add(
+      ImTyping(conversationId: conversationId, from: from, active: true),
+    );
+  }
+
+  void _stopTyping(int conversationId, String from) {
+    final t = _typingTimers.remove(conversationId);
+    if (t == null) return;
+    t.cancel();
+    _typing.add(
+      ImTyping(conversationId: conversationId, from: from, active: false),
+    );
+  }
 
   ImSender _requireSender() {
     _requireLogin();

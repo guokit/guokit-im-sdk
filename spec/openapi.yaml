@@ -13,7 +13,8 @@ info:
     - 全部接口还受站点授权校验：授权异常时回 HTTP 403 + `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN`。
 
     长连接（WebSocket，Centrifuge 协议）不在本规范内，地址、鉴权、断开码见接入文档 §6；
-    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`、`PushConversationChanged`。
+    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`、`PushConversationChanged`、`PushMessageRecalled`、`PushPeerRead`、`PushTyping`。
+    将来可能增加推送事件与消息类型，不认识的忽略或兜底显示。
 servers:
   - url: https://im.example.com
     description: 示例地址，换成你的 IM 服务域名
@@ -457,6 +458,40 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/im/v1/server/messages/{id}/recall:
+    parameters:
+      - $ref: '#/components/parameters/MessageIdPath'
+    post:
+      tags: [服务端]
+      operationId: serverRecallMessage
+      summary: 撤回消息
+      description: |
+        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、`@cs` 发的消息一律按不存在（404）。
+        已撤回的再调返回同一结果，不再推送、不再回调。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200':
+          description: 成功返回撤回后的消息对象（`type` 为 `recalled`）；业务失败为 `IM_RECALL_NOT_ALLOWED`、`IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/Message' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404':
+          description: 消息不存在（`VALIDATION`）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/im/v1/server/conversations/{id}/messages:
     parameters:
       - $ref: '#/components/parameters/ConversationIdPath'
@@ -506,7 +541,7 @@ paths:
                   - $ref: '#/components/schemas/OkEnvelope'
                   - type: object
                     properties:
-                      data: { $ref: '#/components/schemas/User' }
+                      data: { $ref: '#/components/schemas/Me' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
@@ -545,12 +580,100 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/im/v1/messages/{id}/recall:
+    parameters:
+      - $ref: '#/components/parameters/MessageIdPath'
+    post:
+      tags: [客户端]
+      operationId: recallMessage
+      summary: 撤回自己的消息
+      description: |
+        只能撤回本人发的、且在「IM 设置」的撤回时限内（`/me` 的 `features.recall_minutes`，0 = 没开启）。
+        不是本人发的按不存在（404）。已撤回的再调返回同一结果。双方都会收到 `message_recalled` 推送。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回撤回后的消息对象（`type` 为 `recalled`）；业务失败为 `IM_RECALL_NOT_ALLOWED`、`IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/Message' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404':
+          description: 消息不存在（`VALIDATION`）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/recalls:
+    get:
+      tags: [客户端]
+      operationId: listRecalls
+      summary: 撤回增量补齐
+      description: |
+        撤回不产生新的 seq，离线期间被撤回的消息用这个接口补齐：每次重连对账时带上次的 `next_cursor` 调一次，
+        `has_more` 为 true 时接着翻。最近几秒的会重复给，按 `message_id` 覆盖即可；没有新的时 `next_cursor` 原样返回传入值。
+        首次不传 cursor 返回全部。只更新本地已有的消息，本地没有的不用插入。
+      security: [{ UserToken: [] }]
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: 上次返回的 `next_cursor`，持久化保存
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: 默认 100，最大 200（超出按 200）
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200':
+          description: 成功返回本页撤回。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor, has_more]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              type: object
+                              required: [conversation_id, message_id, seq, message]
+                              properties:
+                                conversation_id: { type: integer, format: int64 }
+                                message_id: { type: integer, format: int64 }
+                                seq: { type: integer, format: int64 }
+                                message: { $ref: '#/components/schemas/Message' }
+                          next_cursor: { type: string, description: 下次调用带上；本页为空时等于传入值 }
+                          has_more: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/im/v1/upload:
     post:
       tags: [客户端]
       operationId: uploadImage
-      summary: 上传图片
-      description: 只收 JPEG / PNG / GIF / WebP（按文件内容识别），大小上限取站点「图片上限」设置（默认 8MB）。与发消息同口径单独限速（10 秒 20 次）。
+      summary: 上传图片 / 语音
+      description: |
+        图片只收 JPEG / PNG / GIF / WebP，大小上限取站点「图片上限」设置（默认 8MB）；语音（`kind=voice`）只收 m4a（AAC）与 mp3，
+        不超过 2MB 与「图片上限」中较小的一个，网页访客不能传。都按文件内容识别。与发消息同口径单独限速（10 秒 20 次）。
       security: [{ UserToken: [] }]
       requestBody:
         required: true
@@ -563,7 +686,11 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: 图片文件
+                  description: 图片或语音文件
+                kind:
+                  type: string
+                  enum: [image, voice]
+                  default: image
       responses:
         '200':
           description: 成功返回附件 id、临时预览链接与上传凭证；超频时为 `IM_RATE_LIMITED`。
@@ -752,6 +879,35 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/ForbiddenOrLicense' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/conversations/{id}/typing:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    post:
+      tags: [客户端]
+      operationId: typing
+      summary: 正在输入
+      description: |
+        告诉会话对方自己正在输入，不落库、不回调。输入时最多每 3 秒调一次，停止输入不用通知；对方收到 `typing` 推送，6 秒后没有新的就不再显示。
+        对方不在线、把你拉黑时同样返回成功。客服会话会告诉正在接待的坐席。网页访客与微信用户不能调（400）。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功；业务失败为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403':
+          description: 不是会话成员（`FORBIDDEN`），或站点授权异常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500': { $ref: '#/components/responses/Internal' }
 
   /api/im/v1/conversations/changes:
@@ -1150,6 +1306,12 @@ components:
       required: true
       description: 会话对方的 user_id；该用户的客服会话写 `@cs`
       schema: { type: string, pattern: '^(@cs|[A-Za-z0-9_-]{1,64})$' }
+    MessageIdPath:
+      name: id
+      in: path
+      required: true
+      description: 消息 id
+      schema: { type: integer, format: int64 }
     ConversationIdPath:
       name: id
       in: path
@@ -1298,10 +1460,10 @@ components:
       type: string
       description: |
         失败响应的业务码（字符串）。HTTP 状态与业务码的对应：
-        - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）
+        - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）、消息不存在（撤回）
         - `IM_KEY_INVALID`：401
         - `IM_TOKEN_INVALID`：401
-        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`：200
+        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`：200
         - `FORBIDDEN`：403 不是会话成员
         - `LICENSE_INVALID`、`LICENSE_EXPIRED`、`LICENSE_DOMAIN`：403 站点授权异常
         - `INTERNAL`：500
@@ -1314,6 +1476,7 @@ components:
         - IM_MESSAGE_REJECTED
         - IM_RATE_LIMITED
         - IM_BLOCKED
+        - IM_RECALL_NOT_ALLOWED
         - FORBIDDEN
         - INTERNAL
         - LICENSE_INVALID
@@ -1353,13 +1516,27 @@ components:
         nickname: { type: string, description: 昵称，可能为空串 }
         avatar_url: { type: string, description: 头像链接，可能为空串 }
 
+    Me:
+      description: 当前用户与站点开关
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          required: [features]
+          properties:
+            features:
+              type: object
+              description: 站点在「IM 设置」里的开关；旧版服务端没有这个字段
+              properties:
+                recall_minutes: { type: integer, minimum: 0, description: 撤回时限（分钟），0 = 没开启 }
+                read_receipt: { type: boolean, description: 是否显示对方已读 }
+
     UploadResult:
       type: object
       required: [attachment_id, url, ticket]
       properties:
-        attachment_id: { type: integer, format: int64, description: 附件 id，发图片消息时带上 }
+        attachment_id: { type: integer, format: int64, description: 附件 id，发图片 / 语音消息时带上 }
         url: { type: string, description: 临时链接，仅供本地预览 }
-        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片消息时带上 }
+        ticket: { type: string, description: 上传凭证，与上传者绑定，发图片 / 语音消息时带上 }
 
     BlockItem:
       type: object
@@ -1406,6 +1583,34 @@ components:
         width: { type: integer, minimum: 1, maximum: 20000 }
         height: { type: integer, minimum: 1, maximum: 20000 }
         url: { type: string, description: 现签临时链接；签名失败时为空串 }
+
+    VoiceUploadContent:
+      type: object
+      title: voice（发送时）
+      description: 语音；attachment_id 与 ticket 来自 `/upload`（kind=voice），必须是发送者本人上传的。服务端代发不支持。
+      required: [attachment_id, ticket, duration]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        ticket: { type: string }
+        duration: { type: integer, minimum: 1, maximum: 60, description: 秒，客户端上报 }
+
+    VoiceContent:
+      type: object
+      title: voice（读取时）
+      required: [attachment_id, duration, size, mime, url]
+      properties:
+        attachment_id: { type: integer, format: int64 }
+        duration: { type: integer, minimum: 1, maximum: 60, description: 秒 }
+        size: { type: integer, format: int64, description: 字节 }
+        mime: { type: string, enum: [audio/mp4, audio/mpeg] }
+        url: { type: string, description: 现签临时链接（约 24 小时有效）；签名失败时为空串 }
+
+    RecalledContent:
+      type: object
+      title: recalled（已撤回）
+      required: [by]
+      properties:
+        by: { type: string, enum: [sender, agent, server], description: sender 发送者 / agent 坐席 / server 接入方 }
 
     ImageUrlContent:
       type: object
@@ -1481,13 +1686,14 @@ components:
         to: { type: string, description: 接收方 user_id，不能是自己；客户端可填 `@cs` 发给平台客服 }
         type:
           type: string
-          enum: [text, image, location, custom]
+          enum: [text, image, voice, location, custom]
         content:
-          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；location → LocationContent；custom → CustomContent
+          description: text → TextContent；image → ImageUploadContent 或 ImageUrlContent（二选一）；voice → VoiceUploadContent；location → LocationContent；custom → CustomContent
           oneOf:
             - $ref: '#/components/schemas/TextContent'
             - $ref: '#/components/schemas/ImageUploadContent'
             - $ref: '#/components/schemas/ImageUrlContent'
+            - $ref: '#/components/schemas/VoiceUploadContent'
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
         client_msg_id: { type: string, minLength: 1, maxLength: 64, description: 客户端生成的唯一 id（建议 UUID），重试时沿用同一个 }
@@ -1512,13 +1718,16 @@ components:
         from: { type: string, description: 发送者 user_id；客服发来的为 `@cs` }
         type:
           type: string
-          enum: [text, image, location, custom]
+          enum: [text, image, voice, location, custom, recalled]
+          description: recalled 为已撤回；将来可能增加取值，不认识的兜底显示
         content:
-          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；location → LocationContent；custom → CustomContent
+          description: text → TextContent；image → ImageAttachmentContent 或 ImageUrlContent；voice → VoiceContent；recalled → RecalledContent；location → LocationContent；custom → CustomContent
           oneOf:
             - $ref: '#/components/schemas/TextContent'
             - $ref: '#/components/schemas/ImageAttachmentContent'
             - $ref: '#/components/schemas/ImageUrlContent'
+            - $ref: '#/components/schemas/VoiceContent'
+            - $ref: '#/components/schemas/RecalledContent'
             - $ref: '#/components/schemas/LocationContent'
             - $ref: '#/components/schemas/CustomContent'
         client_msg_id: { type: string }
@@ -1548,10 +1757,10 @@ components:
         from: { type: string }
         type:
           type: string
-          enum: [text, image, location, custom]
+          enum: [text, image, voice, location, custom, recalled]
         preview:
           type: string
-          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，location 为「[位置]」，custom 取 desc
+          description: 会话预览文字：text 取前 50 字，image 为「[图片]」，voice 为「[语音]」，location 为「[位置]」，custom 取 desc，已撤回为「[消息已撤回]」
         created_at: { $ref: '#/components/schemas/DateTime' }
 
     Conversation:
@@ -1582,6 +1791,7 @@ components:
             - $ref: '#/components/schemas/DateTime'
             - type: 'null'
         muted: { type: boolean, description: 本人是否免打扰；免打扰会话的 unread 照常计数，但不计入总未读 }
+        peer_read_seq: { type: integer, format: int64, description: 对方读到哪条；站点没开启对方已读、以及客服会话没有这个字段 }
 
     ConversationSettings:
       type: object
@@ -1635,6 +1845,37 @@ components:
         event: { type: string, const: read }
         conversation_id: { type: integer, format: int64 }
         read_seq: { type: integer, format: int64 }
+
+    PushMessageRecalled:
+      type: object
+      description: |
+        **经长连接下发**，见接入文档 §6。消息被撤回，推给双方所有在线设备（含发起设备）。按 `message.id` 替换本地那条，
+        撤回不可逆；本地没有这个会话时忽略。离线漏掉的用 `GET /api/im/v1/recalls` 补齐。
+      required: [event, conversation_id, seq, message]
+      properties:
+        event: { type: string, const: message_recalled }
+        conversation_id: { type: integer, format: int64 }
+        seq: { type: integer, format: int64 }
+        message: { $ref: '#/components/schemas/Message' }
+
+    PushPeerRead:
+      type: object
+      description: '**经长连接下发**，见接入文档 §6。对方读到新的位置（站点开启对方已读时），只进不退。'
+      required: [event, conversation_id, peer_read_seq]
+      properties:
+        event: { type: string, const: peer_read }
+        conversation_id: { type: integer, format: int64 }
+        peer_read_seq: { type: integer, format: int64 }
+
+    PushTyping:
+      type: object
+      description: '**经长连接下发**，见接入文档 §6。`from` 正在输入，`expires_in` 秒内没有新的、或收到他的消息就不再显示。'
+      required: [event, conversation_id, from, expires_in]
+      properties:
+        event: { type: string, const: typing }
+        conversation_id: { type: integer, format: int64 }
+        from: { type: string, description: 客服会话里为 `@cs` }
+        expires_in: { type: integer, description: 秒 }
 
     PushReadAll:
       type: object

@@ -2,6 +2,16 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## v0.8.0 — 2026-11-25
+
+撤回、语音消息、对方已读、正在输入。需要 IM 服务端 v1.17.0；旧服务端上 `recall` 抛 `ImApiException`、语音发送失败、`features()` 全部按没开启，其余功能不受影响。**撤回与对方已读要站点在「IM 设置」打开，请等用户都升级后再打开。**
+
+- **Flutter**：新增 `recall`、`sendVoice` / `sendVoiceBytes` / `voiceUrl`、`sendTyping` / `onTyping`、`features`；`ImMessage` 加 `isRecalled` / `recalledBy` / `voiceDuration`，`ImConversation` 加 `peerReadSeq`（可空）；处理 `message_recalled`、`peer_read`、`typing` 推送，对账时调 `GET /recalls` 补齐离线期间的撤回；变成已撤回的消息经 `onMessageUpdated` 发出。本地库 v3 → v4 自动升级
+- **Flutter**：`markRead` 每次登录后对每个会话至少上报一次，不再因为未读已是 0 就跳过（否则一键清未读之后再打开聊天，对方永远看不到已读）
+- **不兼容**：自己实现 `ImStore`（桌面端注入）的要补 `recallsCursor`、`setRecallsCursor`、`setPeerReadSeq`，多存 `peerReadSeq`，并按接口注释加撤回的合并规则（本地已撤回的不被旧版本覆盖、撤回时清 `localPath`、撤回的是最后一条时换预览）
+- **PHP**：新增 `recallMessage`；回调事件加 `message_recalled`（透传，`Callback` 不用改）
+- 接入文档新增 §4.10、§5.12–§5.15、§8.7；OpenAPI、Skill、`llms-full.txt` 同步
+
 ## v0.7.0 — 2026-11-24
 
 没有客服在线时留联系方式。需要 IM 服务端 v1.13.0；旧服务端上除 `leaveCs` 抛 `ImApiException` 外，其余功能不受影响。

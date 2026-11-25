@@ -48,12 +48,21 @@ Map<String, dynamic> _conv(
   'muted': settings?['muted'] ?? false,
 };
 
+Map<String, dynamic> _recalled(int conv, int seq) => {
+  ..._msg(conv, seq),
+  'type': 'recalled',
+  'content': {'by': 'sender'},
+};
+
 void main() {
   late GuokitIm im;
   late MemoryImStore store;
   late FakeRealtime rt;
   late List<String> requests;
   var leaveBody = '';
+
+  // 服务端的撤回增量（cursor 固定为 'r1'，每次都重复给全部）。
+  late List<Map<String, dynamic>> recalled;
   late Map<int, int> serverMax;
 
   // 服务端的会话设置：changed 里有的会话会出现在 changes 里（cursor 固定为 'k1'）。
@@ -104,6 +113,7 @@ void main() {
     requests = [];
     serverMax = {1: 5, 2: 4};
     changed = {};
+    recalled = [];
     gate = null;
     providerCalls = 0;
     providerError = null;
@@ -157,6 +167,26 @@ void main() {
               'has_more': false,
             };
             await gate?.future;
+          } else if (req.url.path.endsWith('/recalls')) {
+            data = {
+              'items': [
+                for (final m in recalled)
+                  {
+                    'conversation_id': m['conversation_id'],
+                    'message_id': m['id'],
+                    'seq': m['seq'],
+                    'message': m,
+                  },
+              ],
+              'next_cursor': recalled.isEmpty ? '' : 'r1',
+              'has_more': false,
+            };
+          } else if (req.url.path.endsWith('/recall')) {
+            data = {..._recalled(1, 5), 'from': 'u1'};
+          } else if (req.url.path.endsWith('/typing')) {
+            data = <String, dynamic>{};
+          } else if (req.url.path.endsWith('/read')) {
+            data = {'read_seq': serverMax[1], 'unread': 0};
           } else if (req.url.path.endsWith('/changes')) {
             data = {
               'items': changed.values.toList(),
@@ -246,7 +276,10 @@ void main() {
     await im.conversations();
     await settle();
     expect(requests.where((r) => r.contains('/messages')), isEmpty);
-    expect(requests.last, contains('/changes?cursor=k1'));
+    expect(
+      requests.lastWhere((r) => r.contains('/changes')),
+      contains('cursor=k1'),
+    );
     final c = (await store.getConversation(1))!;
     expect((c.clearSeq, c.unread, c.lastMessage), (5, 0, null));
     expect(await store.messages(1), isEmpty);
@@ -269,6 +302,115 @@ void main() {
     final before = requests.length;
     expect(await im.messages(1, before: page.first), isEmpty);
     expect(requests.length, before);
+  });
+
+  test('撤回：离线补齐只更新本地已有的，推送替换消息与预览，重复给不重复发事件', () async {
+    final updated = <int>[];
+    final news = <int>[];
+    im.onMessageUpdated.listen((m) => updated.add(m.seq!));
+    im.onNewMessage.listen((m) => news.add(m.seq!));
+    // 1/2 本地有；2/4 本地没有消息行、但它是会话 2 的预览
+    recalled = [_recalled(1, 2), _recalled(2, 4), _recalled(9, 1)];
+    await im.login('u1');
+    await settle();
+    expect(updated, [2]);
+    expect((await store.getMessageById(102))!.isRecalled, true);
+    expect(await store.getMessageById(204), null);
+    expect((await store.getConversation(2))!.lastMessage!.preview, '[消息已撤回]');
+    expect(await store.getConversation(9), null);
+    expect(await store.recallsCursor(), 'r1');
+
+    rt.emit(const ImRealtimeConnected()); // 重连再对一次账
+    await settle();
+    expect(updated, [2]);
+
+    updated.clear();
+    news.clear();
+    final push = ImRealtimePublication({
+      'event': 'message_recalled',
+      'conversation_id': 1,
+      'seq': 5,
+      'message': _recalled(1, 5),
+    });
+    rt.emit(push);
+    rt.emit(push);
+    rt.emit(
+      ImRealtimePublication({
+        'event': 'message_recalled',
+        'conversation_id': 77,
+        'seq': 1,
+        'message': _recalled(77, 1),
+      }),
+    );
+    await settle();
+    expect(updated, [5]);
+    expect(news, isEmpty);
+    expect((await store.getConversation(1))!.lastMessage!.preview, '[消息已撤回]');
+    expect(await store.getConversation(77), null); // 本地没有的会话不因撤回建出来
+  });
+
+  test('recall 走同步队列替换本地；别人的或未发出的抛 ArgumentError', () async {
+    await im.login('u1');
+    await settle();
+    await store.upsertMessage(
+      ImMessage.fromServer({..._msg(1, 5), 'from': 'u1'}, me: 'u1'),
+    );
+    final mine = (await store.getMessageById(105))!;
+    await im.recall(mine);
+    expect(requests.last, contains('/messages/105/recall'));
+    expect((await store.getMessageById(105))!.isRecalled, true);
+    expect(
+      () => im.recall(ImMessage.fromServer(_msg(1, 4), me: 'u1')),
+      throwsArgumentError,
+    );
+  });
+
+  test('对方已读推送；一键清未读之后打开聊天仍要标已读', () async {
+    await im.login('u1');
+    await settle();
+    rt.emit(
+      const ImRealtimePublication({
+        'event': 'peer_read',
+        'conversation_id': 1,
+        'peer_read_seq': 3,
+      }),
+    );
+    await settle();
+    expect((await store.getConversation(1))!.peerReadSeq, 3);
+
+    await store.markAllRead();
+    for (var i = 0; i < 2; i++) {
+      await im.markRead(1);
+    }
+    expect(
+      requests.where((r) => r.contains('/conversations/1/read')).length,
+      1,
+    );
+  });
+
+  test('正在输入：推送即时给出、收到消息收起；发送按会话 3 秒节流', () async {
+    final got = <(int, bool)>[];
+    im.onTyping.listen((t) => got.add((t.conversationId, t.active)));
+    await im.login('u1');
+    await settle();
+    rt.emit(
+      const ImRealtimePublication({
+        'event': 'typing',
+        'conversation_id': 1,
+        'from': 'u9',
+        'expires_in': 6,
+      }),
+    );
+    await settle();
+    pushMessage(1, 6);
+    await settle();
+    expect(got, [(1, true), (1, false)]);
+
+    await im.sendTyping(1);
+    await im.sendTyping(1);
+    await im.sendTyping(2);
+    expect(requests.where((r) => r.contains('/typing')).length, 2);
+    await im.logout();
   });
 
   test('删除会话：会话与消息都没了；新消息让它重新出现，旧消息不复现', () async {

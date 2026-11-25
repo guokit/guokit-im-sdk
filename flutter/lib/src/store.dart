@@ -38,7 +38,8 @@ abstract class ImStore {
 
   /// 写入服务端会话列表的一页。已存在的会话按下面规则合并（[mergeConversation]）：
   /// peer / type / 置顶 / 免打扰取服务端；`maxSeq`、`readSeq`、`clearSeq` 取两边较大值（本地可能已被推送推进）；
-  /// 服务端 `maxSeq` 不小于本地时 `lastMessage` / `lastMsgAt` 取服务端，清空范围内的预览置 null。
+  /// 服务端 `maxSeq` 不小于本地时 `lastMessage` / `lastMsgAt` 取服务端，清空范围内的预览置 null；
+  /// 同一条消息本地预览已是撤回的，不退回旧预览。`peerReadSeq` 两边都有取较大值，服务端没给取 null。
   /// `syncedSeq` 不动，新会话为 0。`clearSeq` 变大时只改这一行，旧消息由调用方先调 [clearMessages] 清掉。
   Future<void> upsertConversations(List<ImConversation> list);
 
@@ -73,6 +74,14 @@ abstract class ImStore {
 
   Future<void> setChangesCursor(String cursor);
 
+  /// 撤回增量补齐的游标（`GET /recalls` 的 `next_cursor`），没存过为 null。
+  Future<String?> recallsCursor();
+
+  Future<void> setRecallsCursor(String cursor);
+
+  /// 对方已读位置，只进不退（本地为 null 时直接写入）。返回更新后的会话；会话不存在返回 null。
+  Future<ImConversation?> setPeerReadSeq(int conversationId, int peerReadSeq);
+
   /// 本地已连续持有到的 seq；0 表示从没拉过这个会话的消息（或会话不存在）。
   Future<int> syncedSeq(int conversationId);
 
@@ -89,13 +98,14 @@ abstract class ImStore {
   /// 合并规则见 [mergeMessage]，要点：
   /// - 服务端版本（有 id）覆盖本地字段，`status` 变 sent、错误码清空，但保留本地 `localPath`；
   ///   `to` 为空串时保留本地的 `to`；`urlFetchedAt` 为空时保留本地的；
+  /// - 撤回不可逆：本地已撤回的不会被旧版本覆盖（翻历史、迟到的发送响应都会带旧版本来）；变成撤回时清空 `localPath`、`urlFetchedAt`；
   /// - 已确认（sent）的消息不会被本地版本（无 id）降级——推送先到、HTTP 后超时也不会把它标成 failed。
   ///
   /// 会话存在且 `seq <= clearSeq` 的消息（清空前发出、清空后才到）不入库，已有的本地版本一并删掉，
   /// 返回 `inserted: false`。
   ///
   /// 已确认消息入库后的副作用（[bumpConversation]）：
-  /// - 会话存在：`seq > maxSeq` 时推进 `maxSeq` / `lastMessage` / `lastMsgAt`；本人发的消息把 `readSeq` 推到该条；
+  /// - 会话存在：`seq > maxSeq` 时推进 `maxSeq` / `lastMessage` / `lastMsgAt`；撤回的正是 `lastMessage` 那条时换预览；本人发的消息把 `readSeq` 推到该条；
   /// - 会话不存在：按对方 id 建一条占位会话（peer 昵称头像为空串，等下次会话列表对齐），对方 id 为空串时不建；
   /// - `syncedSeq > 0` 且 `seq == syncedSeq + 1` 时推进 `syncedSeq`。
   ///
@@ -138,10 +148,17 @@ ImMessage mergeMessage(ImMessage existing, ImMessage incoming) {
   if (existing.status == ImMessageStatus.sent && incoming.id == null) {
     return existing;
   }
+  final to = incoming.to.isEmpty ? existing.to : incoming.to;
+  if (existing.isRecalled && !incoming.isRecalled) {
+    return existing.copyWith(to: existing.to.isEmpty ? to : existing.to);
+  }
+  final recalled = incoming.isRecalled;
   return incoming.copyWith(
-    to: incoming.to.isEmpty ? existing.to : incoming.to,
-    localPath: incoming.localPath ?? existing.localPath,
-    urlFetchedAt: incoming.urlFetchedAt ?? existing.urlFetchedAt,
+    to: to,
+    localPath: recalled ? null : incoming.localPath ?? existing.localPath,
+    urlFetchedAt: recalled
+        ? null
+        : incoming.urlFetchedAt ?? existing.urlFetchedAt,
     senderRole: incoming.senderRole ?? existing.senderRole,
   );
 }
@@ -154,9 +171,17 @@ ImConversation mergeConversation(
   if (local == null) return incoming;
   final newer = incoming.maxSeq >= local.maxSeq;
   final clearSeq = math.max(local.clearSeq, incoming.clearSeq);
-  final last = newer
+  var last = newer
       ? (incoming.lastMessage ?? local.lastMessage)
       : local.lastMessage;
+  final mine = local.lastMessage;
+  if (mine != null &&
+      mine.type == 'recalled' &&
+      last != null &&
+      last.seq == mine.seq) {
+    last = mine; // 撤回不可逆：在途的旧列表不能把原文预览写回来
+  }
+  final peerRead = incoming.peerReadSeq;
   return incoming.copyWith(
     maxSeq: math.max(local.maxSeq, incoming.maxSeq),
     readSeq: math.max(local.readSeq, incoming.readSeq),
@@ -164,6 +189,9 @@ ImConversation mergeConversation(
     // 清空后服务端返回 null，不能退回本地的旧预览。
     lastMessage: last != null && last.seq > clearSeq ? last : null,
     lastMsgAt: newer ? incoming.lastMsgAt : local.lastMsgAt,
+    peerReadSeq: peerRead == null
+        ? null
+        : math.max(peerRead, local.peerReadSeq ?? 0),
   );
 }
 
@@ -178,7 +206,7 @@ ImConversation clearedConversation(ImConversation c, int clearSeq) {
   );
 }
 
-/// 会话预览文字，口径同服务端：text 前 50 字，image `[图片]`，location `[位置]`，custom 取 desc。
+/// 会话预览文字，口径同服务端：text 前 50 字，image `[图片]`，voice `[语音]`，location `[位置]`，custom 取 desc。
 String previewOf(ImMessage m) {
   switch (m.type) {
     case 'text':
@@ -186,6 +214,10 @@ String previewOf(ImMessage m) {
       return String.fromCharCodes(runes.take(50));
     case 'image':
       return '[图片]';
+    case 'voice':
+      return '[语音]';
+    case 'recalled':
+      return '[消息已撤回]';
     case 'location':
       return '[位置]';
     case 'custom':
@@ -224,6 +256,11 @@ ImConversation? bumpConversation(ImConversation? conv, ImMessage m) {
   var c = conv;
   if (seq > c.maxSeq) {
     c = c.copyWith(maxSeq: seq, lastMessage: preview, lastMsgAt: m.createdAt);
+  }
+  if (m.isRecalled &&
+      c.lastMessage?.seq == seq &&
+      c.lastMessage?.type != 'recalled') {
+    c = c.copyWith(lastMessage: preview);
   }
   if (m.isSelf && seq > c.readSeq) c = c.copyWith(readSeq: seq);
   return c;

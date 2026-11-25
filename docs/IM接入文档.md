@@ -1,7 +1,7 @@
 # IM 接入文档
 
-本文面向接入方的**后端**与**客户端（App / Web）**开发。一期能力：单聊；文本 / 图片 / 位置 / 自定义四种消息；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后回调。
-群聊、撤回、语音、对方已读回执暂不提供。
+本文面向接入方的**后端**与**客户端（App / Web）**开发。能力：单聊；文本 / 图片 / 语音 / 位置 / 自定义五种消息；撤回；对方已读；正在输入；会话列表；未读与标已读；会话置顶、免打扰、清空记录与删除会话；多端同步；发送前 / 发送后 / 撤回回调。
+群聊暂不提供。撤回与对方已读要站点在「IM 设置」打开才可用（默认关闭）。
 
 下文 `https://im.example.com` 代表你的 IM 服务域名，换成实际地址。
 
@@ -11,7 +11,7 @@
  ┌──────────────┐   REST（X-Api-Key）：导入用户 / 签令牌 / 封禁 / 代发 / 查历史   ┌──────────────┐
  │  接入方后端   │ ───────────────────────────────────────────────────────────▶ │              │
  │              │ ◀─────────────────────────────────────────────────────────── │   IM 服务端   │
- └──────┬───────┘   回调（签名）：before_send（同步） / after_send、user_state（异步）│  （MySQL 为准）│
+ └──────┬───────┘   回调（签名）：before_send（同步） / after_send 等（异步）│  （MySQL 为准）│
         │ 登录时把用户令牌下发给 App                                            │              │
  ┌──────▼───────┐   HTTP 上行（Bearer 令牌）：发消息 / 会话与设置 / 已读 / 上传  │              │
  │ 客户端 App/Web│ ───────────────────────────────────────────────────────────▶ │              │
@@ -59,9 +59,10 @@
 | 200 | `IM_USER_DISABLED` | 用户已封禁（签令牌、发消息的收发方） |
 | 200 | `IM_MESSAGE_REJECTED` | 消息被发送前回调拒绝，`message` 形如 `消息被拒绝：<原因>` |
 | 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），`message` 为「对方已将你拉黑」 |
+| 200 | `IM_RECALL_NOT_ALLOWED` | 不能撤回：站点没开启撤回，或超过时限（§5.12），`message` 说明原因 |
 | 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息超限（§9） |
 | 403 | `FORBIDDEN` | 客户端访问了自己不在其中（或不存在）的会话 |
-| 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10） |
+| 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10）。消息不存在：撤回时（§4.10、§5.12），不是本人发的也按不存在 |
 | 403 | `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN` | IM 站点授权异常，联系 IM 服务提供方 |
 | 500 | `INTERNAL` | 服务端错误，可稍后重试 |
 
@@ -78,6 +79,8 @@
 
 平台客服 `@cs` 的消息另带 `sender_role`，见 §10.2。
 
+**撤回后的消息** `type` 变成 `recalled`，`content` 为 `{"by": "sender" | "agent" | "server"}`（发送者 / 坐席 / 接入方），其余字段不变，原文不再给出，见 §5.12。**`type` 将来可能增加取值，不认识的按「暂不支持的消息」兜底显示，不要报错。**
+
 ## 4. 服务端接口（接入方后端调用）
 
 鉴权：请求头 `X-Api-Key: <API Key>`。路径前缀 `/api/im/v1/server`。
@@ -91,6 +94,7 @@
 | PATCH | `/users/{user_id}` | 封禁 / 解封 |
 | POST | `/users/{user_id}/kick` | 踢下线 |
 | POST | `/messages` | 以某用户身份发消息 |
+| POST | `/messages/{id}/recall` | 撤回消息 |
 | GET | `/conversations/{id}/messages` | 查会话历史（审计） |
 | PUT | `/users/{user_id}/blocks/{target}` | 拉黑 |
 | DELETE | `/users/{user_id}/blocks/{target}` | 解除拉黑 |
@@ -167,7 +171,7 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 
 请求体同客户端发消息（§5.1），多一个 `from` 字段指定发送者。走与客户端完全相同的流程：校验、限速（按 `from` 计）、幂等、发送前回调、推送、发送后回调。返回消息对象。
 收件人已把 `from` 拉黑时同样回 `IM_BLOCKED`（§4.7）。
-注意：服务端拿不到用户的上传凭证，**代发图片请用 `url` 形式**（你自己的 https 图片地址）。
+注意：服务端拿不到用户的上传凭证，**代发图片请用 `url` 形式**（你自己的 https 图片地址），语音不能代发。
 
 ### 4.6 查会话历史 `GET /conversations/{id}/messages`
 
@@ -249,19 +253,25 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - 会话被该用户删除后仍能查询，此时 `visible` 为 `false`，也可以照常设置免打扰、清空、再次删除；但置顶会回 404 `VALIDATION`「会话不存在」（§5.10）。
 - 其他参数错误（两项都不给、置顶超过 50 个）同 §5.10，回 400 `VALIDATION`。
 
+### 4.10 撤回消息 `POST /messages/{id}/recall`
+
+无请求体，返回撤回后的消息对象。**不限时、不看站点的撤回开关**，用于处理违规内容。效果与用户自己撤回相同（§5.12），`content.by` 为 `server`。
+渠道用户（网页访客、微信）参与的会话、`@cs` 发的消息都按不存在处理，回 404 `VALIDATION`。已撤回的再调返回同一结果，不再推送、不再回调。
+撤回后 §4.6 的审计查询也只给撤回后的形态，**原文只在 IM 后台的「消息查询」里看得到**。
+
 ## 5. 客户端接口（App / Web 调用）
 
 鉴权：请求头 `Authorization: Bearer <用户令牌>`。路径前缀 `/api/im/v1`。令牌失效统一回 401 `IM_TOKEN_INVALID`，此时向自家后端换新令牌后重试。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/me` | 当前用户 `{user_id, nickname, avatar_url}`，可用作令牌自检 |
+| GET | `/me` | 当前用户 `{user_id, nickname, avatar_url, features}`，可用作令牌自检。`features` 是站点开关：`recall_minutes` 撤回时限（分钟，0 = 没开启）、`read_receipt` 是否显示对方已读 |
 | POST | `/messages` | 发消息 |
 | GET | `/conversations` | 会话列表（游标分页） |
 | GET | `/conversations/{id}/messages` | 补拉 / 翻历史 |
 | POST | `/conversations/{id}/read` | 标已读 |
 | GET | `/unread` | 总未读 |
-| POST | `/upload` | 上传图片 |
+| POST | `/upload` | 上传图片 / 语音 |
 | PUT | `/blocks/{target}` | 拉黑 |
 | DELETE | `/blocks/{target}` | 解除拉黑 |
 | GET | `/blocks` | 黑名单列表 |
@@ -270,13 +280,16 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | POST | `/conversations/{id}/clear` | 清空聊天记录 |
 | DELETE | `/conversations/{id}` | 删除会话 |
 | GET | `/conversations/changes` | 会话设置增量补齐 |
+| POST | `/messages/{id}/recall` | 撤回自己的消息 |
+| GET | `/recalls` | 撤回增量补齐 |
+| POST | `/conversations/{id}/typing` | 正在输入 |
 
 ### 5.1 发消息 `POST /messages`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | to | string | 接收方 user_id，不能是自己 |
-| type | string | `text` / `image` / `location` / `custom` |
+| type | string | `text` / `image` / `voice` / `location` / `custom` |
 | content | object | 按 type，见下表 |
 | client_msg_id | string | 必填，1–64 字符，客户端生成的唯一 id |
 
@@ -289,15 +302,17 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | `text` | `{"text"}` | 1–5000 字，不能全是空白 |
 | `image`（上传图） | `{"attachment_id", "ticket", "width", "height"}` | `attachment_id`、`ticket` 来自 `/upload`，且必须是**发送者本人**上传的；宽高为 1–20000 的整数 |
 | `image`（外链图） | `{"url", "width", "height"}` | `url` 为 https 链接，≤1024 字符，原样存取；宽高同上 |
+| `voice` | `{"attachment_id", "ticket", "duration"}` | `attachment_id`、`ticket` 来自 `/upload`（`kind=voice`），且必须是**发送者本人**上传的；`duration` 为 1–60 的整数秒，由客户端上报。只支持上传的语音；网页访客、服务端代发不能发 |
 | `location` | `{"lat", "lng", "name", "address"}` | `lat` ∈ [-90, 90]、`lng` ∈ [-180, 180]，必填；`name` ≤100 字、`address` ≤200 字 |
 | `custom` | `{"data", "desc"}` | `data` 必须是 JSON **对象**，压缩序列化后 ≤8KB；`desc` 必填，1–100 字，用于会话预览与离线推送文字。订单、商品这类业务卡片可在 `data.im_card` 里带标准卡片外壳，见 §5.9 |
 
 图片两种形式**二选一**，同时传 `attachment_id` 与 `url` 会被拒。
 收到的上传图消息 content 为 `{"attachment_id", "width", "height", "url"}`：`url` 是**每次读取时现签**的临时链接（约 24 小时有效），不要长期保存；本地按 `attachment_id` 缓存图片，链接过期就重新拉一次该消息拿新链接。外链图原样返回 `{"url", "width", "height"}`。
+收到的语音消息 content 为 `{"attachment_id", "duration", "size", "mime", "url"}`：`size`（字节）与 `mime`（`audio/mp4` / `audio/mpeg`）由服务端给，`url` 规则同上传图。旧版客户端不认识 `voice`，请先让用户升级再开放发语音。
 
-会话预览文字：text 取前 50 字，image 为 `[图片]`，location 为 `[位置]`，custom 取 `desc`。
+会话预览文字：text 取前 50 字，image 为 `[图片]`，voice 为 `[语音]`，location 为 `[位置]`，custom 取 `desc`，已撤回的为 `[消息已撤回]`。
 
-**client_msg_id 幂等**：同一发送者的 `client_msg_id` 全局唯一（跨会话）。重复提交会直接返回**第一次的那条消息**（code 0，不再推送、不再回调），即使内容不同也以第一次为准。
+**client_msg_id 幂等**：同一发送者的 `client_msg_id` 全局唯一（跨会话）。重复提交会直接返回**第一次的那条消息**（code 0，不再推送、不再回调），即使内容不同也以第一次为准；那条已被撤回时返回撤回后的形态。
 做法：用户点发送时生成 UUID，随本地「发送中」消息一起保存；超时或断网重试时**沿用同一个**，就不会重复发。
 
 ### 5.2 会话列表 `GET /conversations?cursor=&limit=`
@@ -322,6 +337,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | pinned / pinned_at | 本人是否置顶、置顶时间；未置顶为 `false` / `null` |
 | muted | 本人是否免打扰。免打扰会话的 `unread` 照常计数，但不计入总未读（§5.5） |
 | clear_seq | 本人清空到的序号，拉消息只会返回比它大的 seq（§5.3）；没清空过为 `0` |
+| peer_read_seq | 对方读到哪条（§5.14）。**站点没开启对方已读、以及客服会话没有这个字段** |
 
 `last_message` 请判空：本人清空记录后还没有新消息时为 `null`（会话仍在原位置，`unread` 为 0），极少数其他情况下也可能为 `null`。
 会话被本人删除后不在列表里，有新消息时会自动重新出现（不再置顶，免打扰保留）。
@@ -351,15 +367,18 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 返回 `{"total": 5}`，即该用户所有**非免打扰**会话的未读之和，可直接用于 App 角标。
 免打扰会话自己的 `unread` 照常计数，只是不计入这里（客户端可以给它显示小红点而不是数字）。与 after_send 的 `to_unread_total`（§8.2）同一口径。
 
-### 5.6 上传图片 `POST /upload`
+### 5.6 上传图片 / 语音 `POST /upload`
 
-`multipart/form-data`，字段名 `file`。只收 JPEG / PNG / GIF / WebP（按文件内容识别，不看扩展名），大小上限取站点「图片上限」设置（默认 8MB）。
+`multipart/form-data`，文件字段名 `file`；可选字段 `kind`：`image`（缺省）或 `voice`。
+
+- **图片**：只收 JPEG / PNG / GIF / WebP（按文件内容识别，不看扩展名），大小上限取站点「图片上限」设置（默认 8MB）。
+- **语音**：只收 m4a（AAC）与 mp3（按文件内容识别），不超过 2MB 与站点「图片上限」中较小的一个。推荐 AAC-LC 单声道的 m4a，iOS、Android、浏览器都能直接播放；小程序录音用 mp3。AMR、Opus、裸 AAC 不收。
 
 ```json
 { "attachment_id": 5531, "url": "https://im.example.com/files/…", "ticket": "q8Zr…" }
 ```
 
-`url` 是临时链接，仅供本地预览；发图片消息时带 `attachment_id` + `ticket` + 宽高。`ticket` 与上传者绑定，别人拿去发不出去。
+`url` 是临时链接，仅供本地预览；发图片消息时带 `attachment_id` + `ticket` + 宽高，发语音消息时带 `attachment_id` + `ticket` + 时长。`ticket` 与上传者绑定，别人拿去发不出去。
 
 ### 5.7 黑名单
 
@@ -526,6 +545,48 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - 每项都是**当前状态**，不是变更历史：同一会话先清空再删除，只会看到删除后的状态。
 - 会话因新消息重新出现**不算**设置修改，不会出现在这里，靠 `message` 推送与会话列表（§5.2）感知。
 
+### 5.12 撤回自己的消息 `POST /messages/{id}/recall`
+
+无请求体，返回撤回后的消息对象。
+
+- 只能撤回**本人发的**、且在站点的撤回时限内的消息。时限由 IM 后台「IM 设置」配置，0 表示没开启（默认），客户端从 `/me` 的 `features.recall_minutes` 取，据此决定是否显示「撤回」。时间以服务端为准。
+- 没开启、超过时限 → `IM_RECALL_NOT_ALLOWED`；不是本人发的或不存在 → 404 `VALIDATION`；太频繁 → `IM_RATE_LIMITED`。
+- 已撤回的再调返回同一结果，不再推送、不再回调。对方把你拉黑后仍可撤回。
+- 撤回后，所有接口、推送里这条消息都变成 `type: "recalled"`（§3），会话预览变成 `[消息已撤回]`；`seq` 不变，**未读数不因撤回减少**。
+- 双方所有在线设备都会收到 `message_recalled` 推送（§6），离线的用 §5.13 补齐。收到后把本地这条消息的内容、预览、已下载的图片与语音一起替换或删掉；**撤回不可逆**，之后拿到的旧版本（如在途的拉消息结果）不要再覆盖回去。
+- 撤回前已经签出去的图片、语音链接在约 24 小时有效期内仍能打开。
+- **旧版客户端不认识撤回**：对方装的是旧版时仍能看到原文。请等客户端都升级后再让站点打开。
+
+### 5.13 撤回增量补齐 `GET /recalls?cursor=&limit=`
+
+撤回不产生新的 seq，离线期间被撤回的消息按 `after_seq` 补拉拿不到，用这个接口补齐（流程见 §7）。
+
+```json
+{ "items": [ { "conversation_id": 12, "message_id": 1024, "seq": 37, "message": { 撤回后的消息对象 } } ],
+  "next_cursor": "MTc2MzYwNDAwMA", "has_more": false }
+```
+
+- 用法同 §5.11：第一次不传 `cursor`（返回全部），之后传上次的 `next_cursor`（持久化保存）；`has_more` 为 `true` 时接着翻；没有新的时 `next_cursor` 原样返回。
+- 最近几秒的可能重复给，按 `message_id` 覆盖即可。`limit` 默认 100、最大 200。本人清空过的不返回。
+- **只更新本地已有的消息和会话预览**，本地没有的不用插入，拉到时自然是撤回后的形态。
+
+### 5.14 对方已读
+
+站点在「IM 设置」打开「显示对方已读」后（`/me` 的 `features.read_receipt`）：
+
+- 会话列表的单聊项带 `peer_read_seq`，自己发的 `seq <= peer_read_seq` 的消息即对方已读；对方读到新的位置时推 `peer_read`（§6）。
+- 只有对方**标已读**（§5.4）会推进它。清空、删除会话、一键清未读、对方发消息都不算看过，所以**打开会话、收到新消息时都要标已读**，哪怕本地未读已经是 0。
+- 离线漏掉的 `peer_read` 没有单独的补齐接口，以会话列表里的 `peer_read_seq` 为准。
+- 客服会话没有 `peer_read_seq`（用户看不到客服是否已读）；客服坐席能看到用户读到哪条。
+
+### 5.15 正在输入 `POST /conversations/{id}/typing`
+
+无请求体，返回 `{}`。不落库、不回调，只给对方在线设备推一条 `typing`（§6）。
+
+- 输入时**最多每 3 秒调一次**，停止输入不用通知。
+- 对方不在线、把你拉黑时同样返回成功。不是会话成员 → 403 `FORBIDDEN`；超频 → `IM_RATE_LIMITED`。这个接口失败都可以忽略。
+- 客服会话会告诉正在接待的坐席。网页访客与微信用户不能调（400）。
+
 ## 6. 长连接
 
 - 地址：`wss://im.example.com/api/im/v1/connect/websocket`
@@ -543,12 +604,19 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 { "event": "read", "conversation_id": 12, "read_seq": 37 }
 { "event": "read_all" }
 { "event": "conversation_changed", "action": "delete", "conversation": { 会话设置对象 } }
+{ "event": "message_recalled", "conversation_id": 12, "seq": 37, "message": { 撤回后的消息对象 } }
+{ "event": "peer_read", "conversation_id": 12, "peer_read_seq": 37 }
+{ "event": "typing", "conversation_id": 12, "from": "u1002", "expires_in": 6 }
 ```
 
 - `message` 同时推给收发双方的所有在线设备，发送者其他设备借此同步；发送设备自己也会收到，按 `message.id`（或 `client_msg_id`）与 HTTP 返回去重。
 - `read` 只推给自己，用于多端同步角标。
 - `read_all` 只推给自己的所有在线设备（一键清全部未读，§5.8；发起设备也会收到，可忽略），不带会话信息：收到后把本地各会话未读清零，或重新拉一次会话列表。
 - `conversation_changed` 只推给自己的所有在线设备（含发起设备），用于多端同步置顶、免打扰、清空与删除（§5.10）。`action` 为 `settings`（置顶 / 免打扰）/ `clear` / `delete`，`conversation` 是完整的会话设置对象，直接覆盖本地即可，不必按 `action` 推算；本地消息怎么清理见 §5.10「客户端本地处理」。离线时漏掉的用 §5.11 补齐。
+- `message_recalled` 推给双方的所有在线设备（含发起设备），按 `message.id` 替换本地那条（§5.12）。本地没有这个会话时忽略，不要因此新建会话。离线时漏掉的用 §5.13 补齐。
+- `peer_read` 推给**对方**的所有在线设备，只进不退（§5.14）。
+- `typing` 表示 `from` 正在输入，`expires_in` 秒内没有新的、或收到了他的消息就不再显示（§5.15）；客服会话里 `from` 为 `@cs`。
+- 将来可能增加事件，不认识的忽略即可。
 
 **断开码**（SDK 的 disconnected 事件里的 `code`）：
 
@@ -604,6 +672,12 @@ Future<centrifuge.Client> connectIm(String token, ImStore store, ImApi api) asyn
         store.clearAllUnread();
       case 'conversation_changed':
         applyConvSettings(store, ev['conversation'] as Map<String, dynamic>);
+      case 'message_recalled':                      // 本地有这个会话才处理；撤回不可逆，旧版本不再覆盖
+        store.applyRecall(ev['message'] as Map<String, dynamic>);
+      case 'peer_read':
+        store.setPeerReadSeq(ev['conversation_id'] as int, ev['peer_read_seq'] as int);
+      case 'typing':
+        showTyping(ev['conversation_id'] as int, ev['from'] as String);
     }
   });
 
@@ -653,11 +727,12 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 - **断线重连 / 冷启动同步**（`syncAll`）：
   1. 拉 `/conversations`，逐页比对每个会话的 `max_seq` 与本地最大 seq；遇到一整页都已追平即可停止翻页。
   2. 带上次保存的游标调 `/conversations/changes`，翻到 `has_more` 为 `false`，逐项覆盖本地会话设置：离线期间被删除的会话移出列表、被清空的删掉旧消息（§5.11，见上例 `pullConvChanges`）。不能只靠列表判断：列表里没有的会话可能只是还没翻到。
-  3. 对落后的会话按 `after_seq=<本地最大 seq>` 补拉（见上例）。本地从没拉过的会话，进入时拉最新一页即可，更早的用 `before_seq` 按需翻。清空过的会话，本地最大 seq 取 `max(本地消息的最大 seq, clear_seq)`，否则会反复补拉。
-  4. 用列表里的 `unread` / `read_seq` 刷新角标，或调 `/unread` 取总数。
+  3. 带上次保存的游标调 `/recalls`，翻到 `has_more` 为 `false`，替换本地已有的消息与会话预览（§5.13）。
+  4. 对落后的会话按 `after_seq=<本地最大 seq>` 补拉（见上例）。本地从没拉过的会话，进入时拉最新一页即可，更早的用 `before_seq` 按需翻。清空过的会话，本地最大 seq 取 `max(本地消息的最大 seq, clear_seq)`，否则会反复补拉。
+  5. 用列表里的 `unread` / `read_seq` 刷新角标，或调 `/unread` 取总数。
 - **跳号检测**：收到 `message` 推送时 `seq > 本地最大 seq + 1`，说明中间漏了，补拉缺的那段（本地最大 seq 同样不小于 `clear_seq`）。
 - **未读**：会话未读 = `max_seq − read_seq`，总未读 = 各**非免打扰**会话之和（与 `/unread` 同一口径）。清空与删除会把 `read_seq` 推到最新，所以不再计未读。自己发的消息会把自己的 `read_seq` 推到该条，所以不计入自己的未读。
-- **多端同步**：同一用户可多设备同时在线；发出的消息推到自己其他设备，标已读推 `read` 事件、一键清未读推 `read_all` 事件，置顶 / 免打扰 / 清空 / 删除推 `conversation_changed` 事件，各端会话列表与角标一起更新。离线设备漏掉的会话设置用 `/conversations/changes` 补齐（§5.11）。
+- **多端同步**：同一用户可多设备同时在线；发出的消息推到自己其他设备，标已读推 `read` 事件、一键清未读推 `read_all` 事件，置顶 / 免打扰 / 清空 / 删除推 `conversation_changed` 事件，各端会话列表与角标一起更新。离线设备漏掉的会话设置用 `/conversations/changes` 补齐（§5.11），漏掉的撤回用 `/recalls` 补齐（§5.13）。
 - **发送失败重试**：超时 / 网络错误时沿用同一个 `client_msg_id` 重发，结果以返回的消息对象为准。
 
 ## 8. 回调
@@ -668,8 +743,8 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 | 头 | 说明 |
 |---|---|
-| `X-Im-Event` | `before_send` / `after_send` / `user_state` / `resolve_user` |
-| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / user_state）的每次重试**保持不变**，用于去重 |
+| `X-Im-Event` | `before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` |
+| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / message_recalled / user_state）的每次重试**保持不变**，用于去重 |
 | `X-Im-Timestamp` | 发出时刻的 Unix 秒 |
 | `X-Im-Signature` | `hex(HMAC-SHA256(回调密钥, 时间戳 + "\n" + 原始请求体))` |
 
@@ -679,7 +754,7 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 - 时机：开启发送前回调且配了地址时，每条新消息在通过参数校验、幂等检查与限速之后、**入库之前**调用。服务端代发（§4.5）同样触发，可按 `from` 自行放行。
 - 超时 2 秒，不重试。
-- `data`：`{from, to, type, content, client_msg_id, from_source, to_source}`（来源取值见 §8.5）；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，不含 ticket 与链接）。
+- `data`：`{from, to, type, content, client_msg_id, from_source, to_source}`（来源取值见 §8.5）；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，语音为 `{attachment_id, duration, size, mime}`，不含 ticket 与链接）。
 - 期望响应：HTTP 200 且
 
   ```json
@@ -701,14 +776,14 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
   ```
 
   `from_source` / `to_source` 是收发双方的来源，见 §8.5。
-  `to_online` 表示发送时接收方是否至少有一条长连接。上传图的 `message.content.url` 约 24 小时有效。
+  `to_online` 表示发送时接收方是否至少有一条长连接。上传图与语音的 `message.content.url` 约 24 小时有效。
   `to_muted` 表示接收方是否对该会话开了免打扰（§5.10），为 `true` 时建议不发离线推送；`to` 为 `@cs` 时恒为 `false`；极少数查询失败的情况下该字段缺省，请按「缺省就当没开免打扰」处理。
   `to_unread_total` 是接收方此刻所有**非免打扰**会话的未读之和（**已含这条消息**；接收方对该会话开了免打扰时，这条不计入），推送时可直接用作角标；`to` 为 `@cs` 时恒为 `0`；极少数统计失败的情况下该字段缺省，请按「缺省就不设角标」处理。
 - 成功判定：HTTP 200 且响应体 `{"code": 0}`（`code` 为数字）。
 - 失败重试：单次超时 5 秒；第 1 次失败后约 1 分钟重试，第 2 次失败后约 5 分钟重试，第 3 次失败标记为失败、不再自动重试，可在「回调记录」手动重投（重投保持原投递 id）。实际时刻按分钟对齐。
 - 请**先落库去重再处理**：以 `X-Im-Delivery-Id` 建唯一键，见过的直接回 `{"code":0}`。
 
-**离线推送建议**：`to_source` 为 `app`、`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
+**离线推送建议**：`to_source` 为 `app`、`to_online === false` 且 `to_muted` 不为 `true` 时由接入方向厂商通道（APNs、FCM、各手机厂商）发通知，文字可用会话预览口径（text 取前 50 字、image「[图片]」、voice「[语音]」、location「[位置]」、custom 取 `desc`），iOS 的 badge 与 Android 厂商角标可直接用 `to_unread_total`。`to_online` 为 true 但 App 已退到后台时系统可能挂起连接，如需更稳可在 App 端结合前后台状态补本地通知。
 
 ### 8.3 验签（PHP）
 
@@ -813,28 +888,43 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 - 换绑、解绑后返回新结果即可，站点最迟在 10 分钟后该用户的下一条消息更新；关闭开关会清掉全部关联，用户取消关注时也会删除。
 - 请在隐私政策里说明客服会关联用户在各渠道的咨询记录。
 
+### 8.7 message_recalled（异步）
+
+- 时机：配了回调地址即生效。消息被撤回（用户、坐席，或接入方自己调 §4.10）后投递，规则同 after_send。站点没开启撤回时，只有你自己调 §4.10 才会产生。
+- `data`（不带原文）：
+
+```json
+{ "message_id": 1024, "conversation_id": 12, "seq": 37, "from": "u1001", "to": "u1002", "by": "sender",
+  "recalled_at": "2026-11-25 10:00:30", "from_source": "app", "to_source": "app" }
+```
+
+- 用来撤掉已发的离线推送、更新你自己的归档。`by` 为 `sender` 发送者 / `agent` 坐席 / `server` 接入方。
+- **可能比对应的 `after_send` 先到**（after_send 失败会退避重投，也可能由后台手动重投）：按 `message_id` 记下已撤回，之后再收到它的 `after_send` 就不要推送原文。已经收到的原文服务端收不回。
+
 ## 9. 限制与配额
 
 | 项 | 上限 |
 |---|---|
 | 接入应用调用服务端接口 | 每应用每分钟 600 次、每天 200000 次（进程内计数，按自然分钟 / 自然日清零），超出回 `IM_RATE_LIMITED` |
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
+| 撤回、正在输入 | 各自每个用户 10 秒内 20 次，超出回 `IM_RATE_LIMITED` |
+| 撤回时限 | 站点配置，0–1440 分钟，0 = 没开启（默认）；服务端接口撤回不限时 |
 | 网页访客 | 每天发 200 条消息、上传 20 张图，超出回 `IM_RATE_LIMITED`；只能发文字与上传的图片 |
 | 用户资料 | user_id `[A-Za-z0-9_-]{1,64}`；昵称 ≤64 字；头像 ≤512 字符；批量每批 1–100 个 |
-| 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB |
+| 消息内容 | 见 §5.1 content 约束表（text ≤5000 字、custom.data ≤8KB 等，业务卡片 `im_card` 也计入 data 的 8KB）；上传图片默认 ≤8MB；语音 1–60 秒、≤2MB |
 | 会话列表 | 每页默认 20、最大 50；首页另含全部置顶会话 |
 | 置顶会话 | 每个用户最多 50 个，超出回 400 `VALIDATION` |
-| 会话设置增量补齐 `/conversations/changes` | 每页默认 100、最大 200 |
+| 增量补齐 `/conversations/changes`、`/recalls` | 每页默认 100、最大 200 |
 | 黑名单列表 | 每页默认 50、最大 200 |
 | 拉消息 | 每页默认 30、最大 100 |
 | 令牌有效期 | 默认 168 小时，可配 1–8760 小时 |
 | before_send | 超时 2 秒，不重试 |
 | resolve_user | 超时 3 秒，不重试；同一微信用户 10 分钟内只问一次 |
-| after_send / user_state | 写入即投递，另有每分钟一轮兜底（每轮最多 100 条）；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
+| after_send / message_recalled / user_state | 写入即投递，另有每分钟一轮兜底（每轮最多 100 条）；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
 | 查询在线状态 | 每次 1–100 个 user_id |
 | 下线判定 | 连接全部断开 30 秒后仍未重连才算下线并推 user_state |
 | Origin 白名单 | 最多 20 个 |
-| 消息保留 | 永久保留 |
+| 消息保留 | 永久保留；撤回的原文只在 IM 后台可查 |
 
 ## 10. 客服
 
@@ -845,7 +935,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 ### 10.1 发起咨询
 
-客户端调 §5.1 发消息，`to` 填 `"@cs"`，其余字段照常（四种消息类型都可以发，上传图同样要带 `ticket`）。
+客户端调 §5.1 发消息，`to` 填 `"@cs"`，其余字段照常（五种消息类型都可以发，上传图与语音同样要带 `ticket`）。
 
 - **只能由用户本人从客户端发**（`Authorization: Bearer <用户令牌>`）。服务端代发（§4.5）的 `from` 或 `to` 是 `@cs` 时一律回 `IM_USER_NOT_FOUND`——接入方后端不能冒充客服，也不能替用户发给客服。
 - 发给 `@cs` 的消息同样计入该用户的发消息限速（§9），同样经过 before_send（`data.to` 为 `"@cs"`，可按需放行）。
@@ -867,6 +957,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 - 每个用户与 `@cs` **只有一条长期会话**，历次咨询的消息都在这一条里按 seq 连续排列，不会因为接待结束换新会话。用户清空或删除后，自己只看得到之后的消息，坐席工作台里的历史不受影响。
 - 客服发来的消息 `from` 均为 `"@cs"`，不暴露是哪位坐席回复的。
 - **`@cs` 的消息多带一个 `sender_role`**（拉取、推送、回调都有，普通消息没有）：`agent` 坐席回复 / `bot` 机器人回复 / `system` 系统提示。`bot` 的内容由 AI 生成，**界面上要向用户标识**（如「AI 生成」）。将来可能增加取值，不认识的按 `system` 处理。
+- **撤回**：用户可以撤回自己发给客服的消息，坐席也可以撤回自己发的（`content.by` 为 `agent`），规则与形态同 §5.12。
 - 进入会话、补拉、标已读直接用这条会话的 `conversation_id` 调 §5.3 / §5.4。
 - **能置顶、免打扰、清空、删除**，用法同普通会话（§5.10）；接入方后端用 §4.9 的接口时 `{peer_id}` 写 `@cs`。这些只影响用户自己的列表和历史，接待、排队、坐席工作台与接待记录照旧。
 - **删除后可能在用户没有任何操作时重新出现**：坐席回复、欢迎语、转接提示、接待超时提示（§10.3）、评价邀请（§10.5）都是 `@cs` 发来的新消息，会让会话自动回到列表。这与「对方发来新消息，会话重新出现」是同一条规则，不必特殊处理。
@@ -904,7 +995,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 
 服务端不推送状态变化。建议在进入客服会话、以及收到 `@cs` 新消息时刷新一次即可。不认识的 `status` 按 `none` 处理。
 
-**机器人与转人工**：站点开了机器人时，新咨询先由机器人回答（`sender_role` 为 `bot`，见 §10.2）。以下情况自动转人工：用户发送转人工关键词（站点后台可配，默认「转人工」「人工客服」）、机器人答不了或调用失败、用户发图片、用量到上限。也可以在 `status` 为 `bot` 时放一个「转人工」按钮，调 `POST /api/imcs/v1/handoff`（无请求体，鉴权同上），返回转完的状态，形状同本接口。机器人接待期间长时间没有新消息会自动结束，不发评价邀请。
+**机器人与转人工**：站点开了机器人时，新咨询先由机器人回答（`sender_role` 为 `bot`，见 §10.2）。以下情况自动转人工：用户发送转人工关键词（站点后台可配，默认「转人工」「人工客服」）、机器人答不了或调用失败、用户发图片或语音、用量到上限。也可以在 `status` 为 `bot` 时放一个「转人工」按钮，调 `POST /api/imcs/v1/handoff`（无请求体，鉴权同上），返回转完的状态，形状同本接口。机器人接待期间长时间没有新消息会自动结束，不发评价邀请。
 
 ### 10.5 评价 `POST /api/imcs/v1/sessions/{id}/rating`
 
@@ -1042,7 +1133,7 @@ if (($d['to_source'] ?? 'app') === 'app' && $d['to'] !== '@cs' && $d['to_online'
 
 公开仓库 <https://github.com/guokit/guokit-im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
 
-- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。
+- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。
 - **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
 - 两者先以 git 依赖分发，安装方式见仓库 README。
 

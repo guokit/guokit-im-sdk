@@ -30,7 +30,8 @@ CREATE TABLE conversations (
   synced_seq INTEGER NOT NULL DEFAULT 0,
   pinned_at INTEGER,
   muted INTEGER NOT NULL DEFAULT 0,
-  clear_seq INTEGER NOT NULL DEFAULT 0
+  clear_seq INTEGER NOT NULL DEFAULT 0,
+  peer_read_seq INTEGER
 )''',
   'CREATE INDEX idx_conversations_peer ON conversations (peer_id)',
   '''
@@ -57,10 +58,11 @@ CREATE TABLE messages (
   _metaSchema,
 ];
 
-/// 键值表，目前只存会话设置增量补齐的游标。
+/// 键值表，存会话设置与撤回增量补齐的游标。
 const _metaSchema =
     'CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)';
 const _changesCursorName = 'conversation_changes_cursor';
+const _recallsCursorName = 'recalls_cursor';
 
 /// v1 → v2（会话置顶、免打扰、清空）。
 const _upgradeV2 = [
@@ -72,6 +74,11 @@ const _upgradeV2 = [
 
 /// v2 → v3（客服消息的发送者角色）。
 const _upgradeV3 = ['ALTER TABLE messages ADD COLUMN sender_role TEXT'];
+
+/// v3 → v4（对方已读）。可空：null = 站点没开启 / 旧服务端 / 客服会话。
+const _upgradeV4 = [
+  'ALTER TABLE conversations ADD COLUMN peer_read_seq INTEGER',
+];
 
 /// 库文件名：userId 里 `[A-Za-z0-9_-]` 以外的字符换成 `_`。
 String sqliteFileName(String userId) =>
@@ -116,7 +123,7 @@ class SqliteImStore implements ImStore {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onCreate: (db, _) async {
           for (final sql in _schema) {
             await db.execute(sql);
@@ -130,6 +137,11 @@ class SqliteImStore implements ImStore {
           }
           if (from < 3) {
             for (final sql in _upgradeV3) {
+              await db.execute(sql);
+            }
+          }
+          if (from < 4) {
+            for (final sql in _upgradeV4) {
               await db.execute(sql);
             }
           }
@@ -170,6 +182,7 @@ class SqliteImStore implements ImStore {
     'pinned_at': c.pinnedAt?.millisecondsSinceEpoch,
     'muted': c.muted ? 1 : 0,
     'clear_seq': c.clearSeq,
+    'peer_read_seq': c.peerReadSeq,
   };
 
   static ImConversation _conv(Map<String, Object?> r) {
@@ -197,6 +210,7 @@ class SqliteImStore implements ImStore {
           : DateTime.fromMillisecondsSinceEpoch(pinned, isUtc: true),
       muted: r['muted'] == 1,
       clearSeq: r['clear_seq'] as int,
+      peerReadSeq: r['peer_read_seq'] as int?,
     );
   }
 
@@ -361,21 +375,44 @@ class SqliteImStore implements ImStore {
     );
   });
 
-  @override
-  Future<String?> changesCursor() async {
+  Future<String?> _meta(String name) async {
     final rows = await _conn.query(
       'meta',
       where: 'name = ?',
-      whereArgs: [_changesCursorName],
+      whereArgs: [name],
     );
     return rows.isEmpty ? null : rows.first['value'] as String;
   }
 
-  @override
-  Future<void> setChangesCursor(String cursor) => _conn.insert('meta', {
-    'name': _changesCursorName,
-    'value': cursor,
+  Future<void> _setMeta(String name, String value) => _conn.insert('meta', {
+    'name': name,
+    'value': value,
   }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<String?> changesCursor() => _meta(_changesCursorName);
+
+  @override
+  Future<void> setChangesCursor(String cursor) =>
+      _setMeta(_changesCursorName, cursor);
+
+  @override
+  Future<String?> recallsCursor() => _meta(_recallsCursorName);
+
+  @override
+  Future<void> setRecallsCursor(String cursor) =>
+      _setMeta(_recallsCursorName, cursor);
+
+  @override
+  Future<ImConversation?> setPeerReadSeq(int conversationId, int peerReadSeq) =>
+      _conn.transaction((txn) async {
+        await txn.rawUpdate(
+          'UPDATE conversations SET peer_read_seq = ? WHERE id = ? '
+          'AND (peer_read_seq IS NULL OR peer_read_seq < ?)',
+          [peerReadSeq, conversationId, peerReadSeq],
+        );
+        return _getConv(txn, conversationId);
+      });
 
   @override
   Future<int> syncedSeq(int conversationId) =>

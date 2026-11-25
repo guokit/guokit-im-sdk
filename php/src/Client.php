@@ -127,6 +127,12 @@ class Client
         return $this->call('DELETE', $this->convPath($userId, $peerId));
     }
 
+    /** 撤回消息：不限时、不看站点开关，用于处理违规内容。不存在抛 VALIDATION（HTTP 404）。 */
+    public function recallMessage(int $messageId): array
+    {
+        return $this->call('POST', '/messages/' . $messageId . '/recall');
+    }
+
     public function sendMessage(string $from, string $to, string $type, array $content, string $clientMsgId): array
     {
         return $this->call('POST', '/messages', ['json' => [

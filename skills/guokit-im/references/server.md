@@ -132,6 +132,7 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 | 以某用户身份发消息 | `POST /messages`，请求体同客户端发消息再加 `from`；from / to 不能是 `@cs` |
 | 审计查历史 | `GET /conversations/{id}/messages` |
 | 查用户是否在线 | `POST /users/online` `{"user_ids":[…]}`，每次 1–100 个，返回 `items[{user_id, online}]`；在线 = 此刻至少一条长连接，这是权威来源 |
+| 撤回违规消息 | `POST /messages/{id}/recall`，不限时，返回撤回后的消息对象；渠道用户的会话、`@cs` 发的消息按不存在（404 `VALIDATION`）。撤回后异步收 `message_recalled` 回调 `{message_id, conversation_id, seq, from, to, by, recalled_at, from_source, to_source}`（不带原文），可能比 after_send 先到，按 `message_id` 判断 |
 | 收上下线通知 | IM 设置打开「推送用户上下线」后收 `user_state` 回调 `{user_id, online, at, ts}`；下线在断开 30 秒后才推；按 `ts` 保留最新，重启不补发下线，以查询为准 |
 | 识别微信用户是哪个会员 | IM 设置打开「识别微信用户」后收同步回调 `resolve_user` `{channel, account_type, appid, openid, unionid}`，3 秒内回 `{"code":0,"data":{"user_id":"u1001"}}`；不认识回空串。只返回**已确认绑定且已导入**的会员，不要按昵称、手机号猜；查询出错回非 0 的 `code`，别回空串（空串会清掉已有关联） |
 | 代发订单 / 商品卡片 | `POST /messages`，`type: custom`，在 `content.data.im_card` 里带标准卡片外壳（title 必填；fields 放订单号、状态等发送时快照；web_link / app_link / mp_path 分别给网页、App、小程序），客服工作台按它画卡片，见接入文档 §5.9 |
@@ -204,4 +205,4 @@ boolean verifyIM(String ts, String sig, byte[] rawBody, String secret) throws Ex
 }
 ```
 
-响应：before_send 回 `{"code":0,"data":{"allow":true}}` 或 `{"code":0,"data":{"allow":false,"reason":"…"}}`；after_send 回 `{"code":0}`；resolve_user 回 `{"code":0,"data":{"user_id":"…"}}`，不认识为空串。
+响应：before_send 回 `{"code":0,"data":{"allow":true}}` 或 `{"code":0,"data":{"allow":false,"reason":"…"}}`；after_send、message_recalled 回 `{"code":0}`；resolve_user 回 `{"code":0,"data":{"user_id":"…"}}`，不认识为空串。

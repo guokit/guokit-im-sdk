@@ -69,6 +69,18 @@ class ClientTest extends TestCase
         $this->assertSame('/api/im/v1/server/users/u1/conversations/u2', $req->getUri()->getPath());
     }
 
+    public function testRecallMessage(): void
+    {
+        $im = $this->client(new Response(200, [], json_encode([
+            'code' => 0, 'message' => 'ok',
+            'data' => ['id' => 1024, 'type' => 'recalled', 'content' => ['by' => 'server']],
+        ])));
+        $this->assertSame('recalled', $im->recallMessage(1024)['type']);
+        $req = $this->history[0]['request'];
+        $this->assertSame('POST', $req->getMethod());
+        $this->assertSame('/api/im/v1/server/messages/1024/recall', $req->getUri()->getPath());
+    }
+
     public function testIssueTokenOk(): void
     {
         $im = $this->client(new Response(200, [], json_encode([

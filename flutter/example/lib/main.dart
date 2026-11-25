@@ -5,10 +5,15 @@
 //
 //   flutter run --dart-define=IM_BASE_URL=http://127.0.0.1:8080 \
 //     --dart-define=IM_USER=u1001 --dart-define=IM_TOKEN=<后端签的令牌> --dart-define=IM_PEER=u1002
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:guokit_im/guokit_im.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 const _baseUrl = String.fromEnvironment('IM_BASE_URL', defaultValue: 'http://127.0.0.1:8080');
 const _user = String.fromEnvironment('IM_USER');
@@ -94,20 +99,96 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
   final Map<String, ImMessage> _msgs = {}; // 按 clientMsgId 去重
+  final _recorder = AudioRecorder();
+  final _player = AudioPlayer();
+  final List<StreamSubscription<Object?>> _subs = [];
   int? _convId;
+  int? _peerReadSeq; // null = 站点没开启对方已读
+  ImFeatures? _features;
+  bool _peerTyping = false;
+  DateTime? _recordingSince;
 
   @override
   void initState() {
     super.initState();
-    im.onNewMessage.listen(_onMessage);
-    im.onMessageUpdated.listen(_onMessage);
+    _subs.addAll([
+      im.onNewMessage.listen(_onMessage),
+      im.onMessageUpdated.listen(_onMessage),
+      im.onTyping.listen((t) {
+        if (t.conversationId == _convId) setState(() => _peerTyping = t.active);
+      }),
+      im.onConversationsChanged.listen((list) {
+        for (final c in list) {
+          if (c.peer.userId == widget.peer) setState(() => _peerReadSeq = c.peerReadSeq);
+        }
+      }),
+    ]);
+    im.features().then((f) => mounted ? setState(() => _features = f) : null).ignore();
     _load();
+  }
+
+  @override
+  void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _recorder.dispose();
+    _player.dispose();
+    super.dispose();
+  }
+
+  void _tip(String text) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  bool _canRecall(ImMessage m) {
+    final minutes = _features?.recallMinutes ?? 0;
+    return m.isSelf &&
+        m.id != null &&
+        !m.isRecalled &&
+        DateTime.now().toUtc().difference(m.createdAt) < Duration(minutes: minutes);
+  }
+
+  Future<void> _recall(ImMessage m) async {
+    try {
+      await im.recall(m);
+    } on ImApiException catch (e) {
+      _tip(e.message);
+    }
+  }
+
+  // 录音、播放由 App 自己做，SDK 只管上传与收发。
+  Future<void> _toggleRecord() async {
+    final since = _recordingSince;
+    if (since == null) {
+      if (!await _recorder.hasPermission()) return _tip('没有麦克风权限');
+      final dir = await getTemporaryDirectory();
+      await _recorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc, numChannels: 1, bitRate: 64000),
+        path: '${dir.path}/${DateTime.now().millisecondsSinceEpoch}.m4a',
+      );
+      setState(() => _recordingSince = DateTime.now());
+      return;
+    }
+    final path = await _recorder.stop();
+    setState(() => _recordingSince = null);
+    if (path == null) return;
+    final used = DateTime.now().difference(since);
+    const max = Duration(seconds: 60);
+    final r = await im.sendVoice(widget.peer, path, used > max ? max : used);
+    if (r.status != ImMessageStatus.sent) _tip('发送失败：${r.errorCode} ${r.errorMessage ?? ''}');
+  }
+
+  Future<void> _play(ImMessage m) async {
+    final url = await im.voiceUrl(m);
+    if (url != null && url.isNotEmpty) await _player.play(UrlSource(url));
   }
 
   Future<void> _load() async {
     final conv = await im.conversationWith(widget.peer);
     if (conv == null) return; // 还没有会话：直接发消息即可，服务端会建
     _convId = conv.id;
+    _peerReadSeq = conv.peerReadSeq;
     final list = await im.messages(conv.id);
     setState(() => _msgs.addEntries(list.map((m) => MapEntry(m.clientMsgId, m))));
     await im.markRead(conv.id);
@@ -137,7 +218,7 @@ class _ChatPageState extends State<ChatPage> {
     final list = _msgs.values.toList()
       ..sort((a, b) => (a.seq ?? 1 << 30).compareTo(b.seq ?? 1 << 30));
     return Scaffold(
-      appBar: AppBar(title: Text(widget.peer)),
+      appBar: AppBar(title: Text(_peerTyping ? '${widget.peer} 正在输入…' : widget.peer)),
       body: Column(children: [
         Expanded(
           child: ListView(children: [
@@ -146,7 +227,11 @@ class _ChatPageState extends State<ChatPage> {
                 alignment: m.isSelf ? Alignment.centerRight : Alignment.centerLeft,
                 child: Padding(
                   padding: const EdgeInsets.all(6),
-                  child: Text('${_describe(m)}  [${m.status.name}]'),
+                  child: GestureDetector(
+                    onTap: m.type == 'voice' ? () => _play(m) : null,
+                    onLongPress: _canRecall(m) ? () => _recall(m) : null, // 长按撤回
+                    child: Text('${_describe(m)}  [${_status(m)}]'),
+                  ),
                 ),
               ),
           ]),
@@ -156,16 +241,40 @@ class _ChatPageState extends State<ChatPage> {
             icon: const Icon(Icons.image),
             onPressed: () => im.sendImageBytes(widget.peer, _demoPng, filename: 'demo.png'),
           ),
-          Expanded(child: TextField(controller: _input, onSubmitted: (_) => _sendText())),
+          if (!kIsWeb) // 浏览器录出来多为 Opus，服务端不收
+            IconButton(
+              icon: Icon(_recordingSince == null ? Icons.mic : Icons.stop),
+              onPressed: _toggleRecord,
+            ),
+          Expanded(
+            child: TextField(
+              controller: _input,
+              onSubmitted: (_) => _sendText(),
+              onChanged: (v) {
+                final id = _convId;
+                if (id != null && v.isNotEmpty) im.sendTyping(id); // SDK 自己节流
+              },
+            ),
+          ),
           IconButton(icon: const Icon(Icons.send), onPressed: _sendText),
         ]),
       ]),
     );
   }
 
+  String _status(ImMessage m) {
+    final read = _peerReadSeq;
+    if (!m.isSelf || m.seq == null || read == null) return m.status.name;
+    return m.seq! <= read ? '已读' : '未读';
+  }
+
   String _describe(ImMessage m) => switch (m.type) {
         'text' => m.content['text'] as String? ?? '',
         'image' => '[图片 ${m.content['width'] ?? '?'}x${m.content['height'] ?? '?'}]',
+        'voice' => '[语音 ${m.voiceDuration?.inSeconds ?? '?'}″]',
+        'recalled' => m.recalledBy == 'sender'
+            ? '${m.isSelf ? '你' : '对方'}撤回了一条消息'
+            : '消息已撤回',
         'location' => '[位置]',
         _ => m.content['desc'] as String? ?? '[${m.type}]',
       };

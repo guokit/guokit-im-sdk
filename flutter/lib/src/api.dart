@@ -53,6 +53,38 @@ class ImApi {
   Future<ImPeer> me() async =>
       ImPeer.fromServer(await _json('GET', '/me') as Map);
 
+  /// `GET /me` 的站点开关。
+  Future<ImFeatures> features() async =>
+      ImFeatures.fromServer(await _json('GET', '/me') as Map);
+
+  /// `POST /messages/{id}/recall`：撤回，返回撤回后的消息对象（原始 Map）。
+  Future<Map<String, dynamic>> recall(int messageId) async =>
+      _asMap(await _json('POST', '/messages/$messageId/recall'));
+
+  /// `GET /recalls`：撤回增量一页，`items` 每项含 `conversation_id` / `message_id` / `seq` / `message`。
+  Future<({List<Map<String, dynamic>> items, String nextCursor, bool hasMore})>
+  recalls({String? cursor, int? limit}) async {
+    final d = _asMap(
+      await _json(
+        'GET',
+        '/recalls',
+        query: {
+          if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+          if (limit != null) 'limit': '$limit',
+        },
+      ),
+    );
+    return (
+      items: [for (final e in d['items'] as List) _asMap(e)],
+      nextCursor: d['next_cursor'] as String,
+      hasMore: d['has_more'] as bool,
+    );
+  }
+
+  /// `POST /conversations/{id}/typing`：正在输入。
+  Future<void> typing(int conversationId) =>
+      _json('POST', '/conversations/$conversationId/typing');
+
   /// `POST /messages`：发消息，返回服务端消息对象（原始 Map）。
   ///
   /// 业务失败（`IM_USER_NOT_FOUND` / `IM_BLOCKED` / `IM_RATE_LIMITED` 等）抛 [ImApiException]，
@@ -75,15 +107,17 @@ class ImApi {
     ),
   );
 
-  /// `POST /upload`：上传图片（multipart 字段 `file`）。服务端按内容识别格式，[filename] 只作展示。
+  /// `POST /upload`：上传图片或语音（multipart 字段 `file`，[kind] 为 `image` / `voice`）。服务端按内容识别格式，[filename] 只作展示。
   Future<({int attachmentId, String url, String ticket})> upload(
     List<int> bytes,
-    String filename,
-  ) async {
+    String filename, {
+    String kind = 'image',
+  }) async {
     final d = _asMap(
       await _send((token) {
         final r = http.MultipartRequest('POST', _uri('/upload'))
           ..headers['Authorization'] = 'Bearer $token'
+          ..fields['kind'] = kind
           ..files.add(
             http.MultipartFile.fromBytes('file', bytes, filename: filename),
           );

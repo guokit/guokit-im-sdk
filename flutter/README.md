@@ -1,11 +1,11 @@
 # guokit_im · Flutter 客户端 SDK
 
-guokit IM 的 Flutter 客户端：替你处理令牌续期、断线对账补拉、本地消息缓存、发送重试与去重、图片上传与链接过期重拉。
+guokit IM 的 Flutter 客户端：替你处理令牌续期、断线对账补拉、本地消息缓存、发送重试与去重、图片与语音的上传、链接过期重拉，撤回与已读同步。
 对外只暴露 Dart 自带的 `Stream`，不绑定任何状态管理库。
 
 - iOS / Android：本地缓存用 SQLite（每个用户一个库文件）。
 - Web：只做内存缓存，能收发，刷新页面后从服务端重拉。
-- 需要 IM 服务端 ≥ v1.8.0。
+- 需要 IM 服务端 ≥ v1.8.0；撤回、语音、对方已读、正在输入需要 ≥ v1.17.0。
 
 ## 安装
 
@@ -15,7 +15,7 @@ dependencies:
     git:
       url: https://github.com/guokit/guokit-im-sdk.git
       path: flutter
-      ref: v0.7.0
+      ref: v0.8.0
 ```
 
 ## 上手
@@ -35,7 +35,7 @@ final im = GuokitIm(ImConfig(
 
 await im.login('u1001');                 // 登录成功后（自家账号体系）调用
 im.onNewMessage.listen((m) { /* 新消息（含本人在其他设备发出的） */ });
-im.onMessageUpdated.listen((m) { /* 本设备发出的消息状态变化 */ });
+im.onMessageUpdated.listen((m) { /* 本设备发出的消息状态变化、消息被撤回 */ });
 im.onConversationsChanged.listen((list) { /* 会话列表快照 */ });
 im.onTotalUnreadChanged.listen((n) { /* 角标 */ });
 im.onKickedOut.listen((_) { /* 被封禁或踢下线：走登出 */ });
@@ -55,8 +55,9 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 |---|---|
 | `login(userId)` / `logout({clearCache})` | 打开本地库、取令牌、连接、对账 / 断开并关库。取令牌失败不抛异常，只报 disconnected；已登录同一用户时再调一次即重连 |
 | `currentUserId` / `totalUnread` / `connectionState` | 同步取值 |
-| `onNewMessage` | 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的不走这里 |
-| `onMessageUpdated` | 本设备消息状态变化（发送中 → 成功 / 失败 / 被拒收）、图片换新链接 |
+| `onNewMessage` | 新入库的消息：别人发来的，以及本人在其他设备发出的。本设备发出的、已撤回的不走这里 |
+| `onMessageUpdated` | 本设备消息状态变化（发送中 → 成功 / 失败 / 被拒收）、图片与语音换新链接、消息变成已撤回（不分本人与对方） |
+| `onTyping` | 对方「正在输入」的变化，`active` 为 false 时收起 |
 | `onConversationsChanged` / `onTotalUnreadChanged` | 会话快照（置顶在前，其余按最后消息时间倒序）/ 总未读（不计免打扰会话，登录后先推一次本地值） |
 | `onConnectionChanged` / `onKickedOut` | 连接状态 / 被封禁或踢下线 |
 | `conversations()` | 先返回本地快照，后台再对齐服务端 |
@@ -64,6 +65,10 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `conversationWith(peerId)` | 只查本地，见下方常见问题 |
 | `pendingTo(peerId)` | 发给对方的未确认消息（发送中 / 失败 / 被拒收），还没有会话时聊天页用它显示，失败的可重发 |
 | `sendText / sendImage(路径) / sendImageBytes(字节) / sendLocation / sendCustom` | 立即经 `onMessageUpdated` 发出「发送中」；Future 在终态完成，**不抛异常** |
+| `sendVoice(to, 路径, 时长) / sendVoiceBytes(to, 字节, 时长)` | 发语音，m4a（AAC）或 mp3，60 秒、2MB 以内，见下方常见问题 |
+| `recall(msg)` | 撤回自己发的消息，失败会抛，见下方常见问题 |
+| `features()` | 站点开关：`recallMinutes` 撤回时限（0 = 没开启）、`readReceipt` 是否显示对方已读 |
+| `sendTyping(convId)` | 告诉对方自己正在输入，SDK 3 秒节流，失败静默 |
 | `resend(failed)` | 只能重发 `failed` 的消息，沿用原 `client_msg_id`，服务端幂等不会重复 |
 | `markRead(convId)` / `markAllRead()` | 标已读 / 一键清全部未读 |
 | `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
@@ -71,7 +76,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `block / unblock / blocks` | 黑名单 |
 | `csState()` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
 | `leaveCs({name, phone, email})` | 没有客服在线时留联系方式，返回留言单号，见下方常见问题 |
-| `imageUrl(msg)` | 返回可用的图片地址；上传图链接约 24 小时过期，SDK 会在快过期时重拉 |
+| `imageUrl(msg)` / `voiceUrl(msg)` | 返回可用的图片 / 语音地址；上传的链接约 24 小时过期，SDK 会在快过期时重拉 |
 
 **发送结果**（`ImMessage.status` 与 `errorCode`）：
 
@@ -81,7 +86,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `rejected` | `IM_BLOCKED`（对方拉黑了你）、`IM_MESSAGE_REJECTED`（审核拒绝） | 提示「被对方拒收」，不要重发 |
 | `failed` | `NETWORK`、`IM_RATE_LIMITED`、服务端 5xx | 允许用户点「重发」 |
 | `failed` | `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`VALIDATION` | 按错误码提示，例如「对方还不能接收私信」 |
-| `failed` | `IMAGE_DECODE`、`FILE_READ`、`IMAGE_MISSING`、`KICKED_OUT`、`UNKNOWN` | SDK 自己的错误码，见 `lib/src/sender.dart` 文件头 |
+| `failed` | `IMAGE_DECODE`、`FILE_READ`、`IMAGE_MISSING`、`VOICE_MISSING`、`KICKED_OUT`、`UNKNOWN` | SDK 自己的错误码，见 `lib/src/sender.dart` 文件头 |
 
 ## 常见问题
 
@@ -119,10 +124,23 @@ IM 不提供查他人资料的接口，资料归你的业务系统，聊天页�
 发送中 / 失败的上传图还没有会话可重拉，`imageUrl` 返回上传时的临时链接；按路径发的图在本机优先用 `msg.localPath` 显示。
 外链图（发送时只给了 `url`）原样返回，不会过期。
 
+**撤回怎么做？**
+- 站点没开启时 `features().recallMinutes` 为 0，不要显示「撤回」；开启了，自己发的、在时限内的消息才显示。真正的判断在服务端，`recall(msg)` 抛 `ImApiException`（`IM_RECALL_NOT_ALLOWED`）时直接显示 `message`
+- 撤回后 `msg.isRecalled` 为 true、`msg.recalledBy` 为 `sender` / `agent`（客服坐席）/ `server`（你的后端），原文已不在，显示「消息已撤回」。对方撤回、离线期间的撤回都会经 `onMessageUpdated` 发出，未读数不变
+- SDK 会清空这条消息的 `localPath`，但**不删任何文件**（可能是用户相册里的原图）；录音临时文件、App 自己缓存的图片和语音，请在 `onMessageUpdated` 里清掉
+- **旧版 SDK 不认识撤回**，对方装的是旧版时仍能看到原文。等用户都升级了再让站点打开
+
+**语音怎么做？**
+录音和播放由 App 自己做，SDK 只管上传与收发。推荐 AAC-LC 单声道的 m4a；AMR、Opus、裸 AAC 服务端不收（浏览器录出来多为 Opus）。`msg.voiceDuration` 是时长，播放前调 `voiceUrl(msg)` 取地址。旧版 App 不认识语音，请先让用户升级。网页访客不能发语音。
+
+**「已读」怎么显示？**
+`ImConversation.peerReadSeq` 不为 null 时，自己发的 `seq <= peerReadSeq` 的消息显示「已读」，其余「未读」；为 null（站点没开启、旧版服务端、客服会话）就都不显示。
+对方的「已读」只由你调 `markRead(convId)` 推进，打开会话、会话打开着时收到新消息都要调，**不要因为未读已经是 0 就跳过**（一键清未读不算看过，SDK 会判断要不要真的发请求）。
+
 **Web 端要注意什么？**
 - 页面和 IM 不同源时，要在 IM 后台「IM 设置 → 允许的 Origin」加上页面源（如 `https://www.example.com`），否则接口和长连接都会被浏览器拦下。
-- Web 拿不到文件路径，发图片用 `sendImageBytes`。
-- 字节版图片发送失败后，字节只在内存里。刷新页面或重新登录后，这条无法重发（`IMAGE_MISSING`）。
+- Web 拿不到文件路径，发图片用 `sendImageBytes`，发语音用 `sendVoiceBytes`。
+- 字节版图片、语音发送失败后，字节只在内存里。刷新页面或重新登录后，这条无法重发（`IMAGE_MISSING` / `VOICE_MISSING`）。
 - Web 只缓存在内存里，刷新页面会重新从服务端拉。
 
 **自定义消息怎么发？**
@@ -154,6 +172,6 @@ await im.sendCustom('@cs', {
 字段上限与完整规则见接入文档「§5.9 业务卡片」。
 
 **已知限制**
-- 对账翻会话列表时只比较 `max_seq`。离线期间在别的设备上标了已读、又不在列表首页的老会话，要等它下次来新消息时未读数才会对齐。
+- 对账翻会话列表时只比较 `max_seq`。离线期间在别的设备上标了已读、又不在列表首页的老会话，要等它下次来新消息时未读数才会对齐。离线期间对方读到的位置（`peerReadSeq`）同理。
 - 已删除的会话（或全新的会话）收到新消息时，SDK 会拉一次会话列表首页取对方资料（首页 = 全部置顶 + 最新的一页非置顶，刚来消息的会话必在其中）。如果这次请求失败，会先显示成昵称和头像为空、未免打扰的占位会话，下次对账时补全。
-- 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。自己实现 `ImStore` 的，升到 0.5.0 及以上要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并照接口注释更新合并、排序、总未读规则；升到 0.6.0 及以上、按列存消息的要多存 `senderRole`（用 `toJson` / `fromJson` 的不用改）。
+- 桌面端（macOS / Windows / Linux）没有内置 SQLite 初始化，需要自己通过 `ImConfig(store: …)` 注入存储。自己实现 `ImStore` 的，升到 0.5.0 及以上要补 `clearMessages`、`deleteConversation`、`changesCursor`、`setChangesCursor`，并照接口注释更新合并、排序、总未读规则；升到 0.6.0 及以上、按列存消息的要多存 `senderRole`（用 `toJson` / `fromJson` 的不用改）；升到 0.8.0 及以上要补 `recallsCursor`、`setRecallsCursor`、`setPeerReadSeq`，按列存会话的要多存 `peerReadSeq`（可空），并照接口注释加「撤回不可逆」「撤回换预览」的合并规则。

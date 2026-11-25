@@ -168,4 +168,36 @@ void main() {
     );
     expect(await im.imageUrl(m), 'https://im/new');
   });
+
+  test('sendVoiceBytes 上传后发送带时长；时长越界抛 ArgumentError', () async {
+    final m = await im.sendVoiceBytes(
+      'u2',
+      _png,
+      const Duration(milliseconds: 2600),
+    );
+    expect(m.status, ImMessageStatus.sent);
+    expect(sent.single['content'], {
+      'attachment_id': 55,
+      'ticket': 'tk',
+      'duration': 3,
+    });
+    expect(m.voiceDuration, const Duration(seconds: 3));
+    expect(await im.voiceUrl(m), 'https://im/old');
+    expect(await im.imageUrl(m), null);
+    expect((await im.conversationWith('u2'))!.lastMessage!.preview, '[语音]');
+    expect(
+      () => im.sendVoiceBytes('u2', _png, const Duration(seconds: 61)),
+      throwsArgumentError,
+    );
+  });
+
+  test('语音网络失败后重发：不丢时长', () async {
+    mode = 'network';
+    final f = await im.sendVoiceBytes('u2', _png, const Duration(seconds: 5));
+    expect(f.status, ImMessageStatus.failed);
+    mode = 'ok';
+    final ok = await im.resend(f);
+    expect(ok.status, ImMessageStatus.sent);
+    expect((sent.last['content'] as Map)['duration'], 5);
+  });
 }

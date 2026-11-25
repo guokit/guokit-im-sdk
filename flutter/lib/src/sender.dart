@@ -1,11 +1,11 @@
-/// 发送（spec §3.5）：文本、图片（路径 / 字节）、位置、自定义、重发，以及上传图链接重拉。
+/// 发送（spec §3.5）：文本、图片与语音（路径 / 字节）、位置、自定义、重发，以及上传的图片、语音链接重拉。
 ///
 /// 由门面在登录时构造，一次登录一个实例。所有 `send*` / [ImSender.resend] 都在终态（sent / failed / rejected）
 /// 完成，**发送失败不抛异常**，看返回消息的 `status` 与 `errorCode`。
 ///
 /// 除服务端错误码外，SDK 自己会写的 `errorCode`：
 /// - `NETWORK`：超时、断网（可重发）；`BAD_RESPONSE`：响应不是合法响应包；
-/// - `IMAGE_DECODE`：图片解不出宽高；`FILE_READ`：按路径读文件失败；`IMAGE_MISSING`：重发时原图字节已不在；
+/// - `IMAGE_DECODE`：图片解不出宽高；`FILE_READ`：按路径读文件失败；`IMAGE_MISSING` / `VOICE_MISSING`：重发时原图 / 语音的字节已不在；
 /// - `KICKED_OUT`：换令牌时接入方 `tokenProvider` 抛了 [ImKickedOutException]（同时已发 `onKickedOut`）；
 /// - `UNKNOWN`：其他意外异常（`errorMessage` 为异常文本）。
 library;
@@ -75,12 +75,12 @@ class ImSender {
 
   final ImImageSizeReader imageSize;
 
-  /// 上传图链接超过这么久就重拉（服务端约 24 小时过期）。
+  /// 上传的图片、语音链接超过这么久就重拉（服务端约 24 小时过期）。
   static const Duration urlMaxAge = Duration(hours: 20);
 
   static const _uuid = Uuid();
 
-  /// bytes 版图片的原始字节，按 clientMsgId 保留到 sent / rejected（failed 时留着给重发）。
+  /// bytes 版图片、语音的原始字节，按 clientMsgId 保留到 sent / rejected（failed 时留着给重发）。
   final Map<String, Uint8List> _bytes = {};
   final Map<String, String> _filenames = {};
 
@@ -127,6 +127,39 @@ class ImSender {
     return _sendNew(to, 'image', {}, clientMsgId: cid);
   }
 
+  /// 按路径发语音（io 端）。[duration] 为录音时长，四舍五入到秒。重发时按 `localPath` 重读。
+  Future<ImMessage> sendVoice(String to, String filePath, Duration duration) {
+    if (!canReadFiles) {
+      throw UnsupportedError('当前平台不能按路径读文件，请用 sendVoiceBytes');
+    }
+    return _sendNew(to, 'voice', {
+      'duration': voiceSeconds(duration),
+    }, localPath: filePath);
+  }
+
+  /// 按字节发语音（Web 必须用这个）。字节在内存里保留到终态，失败后可重发。
+  Future<ImMessage> sendVoiceBytes(
+    String to,
+    Uint8List bytes,
+    Duration duration, {
+    String filename = 'voice.m4a',
+  }) {
+    final seconds = voiceSeconds(duration);
+    final cid = _uuid.v4();
+    _bytes[cid] = bytes;
+    _filenames[cid] = filename;
+    return _sendNew(to, 'voice', {'duration': seconds}, clientMsgId: cid);
+  }
+
+  /// 时长取整秒；不足 1 秒算 1 秒，超过 60 秒抛 [ArgumentError]。
+  static int voiceSeconds(Duration d) {
+    final s = (d.inMilliseconds / 1000).round();
+    if (d <= Duration.zero || s > 60) {
+      throw ArgumentError.value(d, 'duration', '语音时长须在 60 秒以内');
+    }
+    return s < 1 ? 1 : s;
+  }
+
   /// 重发一条 failed 消息，沿用原 clientMsgId（服务端幂等）。rejected 不允许重发。
   Future<ImMessage> resend(ImMessage failed) async {
     if (failed.status != ImMessageStatus.failed || !failed.isSelf) {
@@ -149,8 +182,14 @@ class ImSender {
   /// 更新本地并发 `onMessageUpdated` 后返回新地址。重拉失败返回旧地址，不抛。
   /// 未确认（发送中 / 失败）的上传图没有会话可重拉，返回上传时拿到的临时链接（约 24 小时有效）；
   /// 按路径发的图在本机优先用 `localPath` 显示。
-  Future<String?> imageUrl(ImMessage message) async {
-    if (message.type != 'image') return null;
+  Future<String?> imageUrl(ImMessage message) async =>
+      message.type == 'image' ? _mediaUrl(message) : null;
+
+  /// 语音可用地址，规则同 [imageUrl]；非语音 null。
+  Future<String?> voiceUrl(ImMessage message) async =>
+      message.type == 'voice' ? _mediaUrl(message) : null;
+
+  Future<String?> _mediaUrl(ImMessage message) async {
     final m =
         (message.id == null ? null : await store.getMessageById(message.id!)) ??
         message;
@@ -227,18 +266,17 @@ class ImSender {
   Future<ImMessage> _deliverInner(ImMessage local) async {
     var msg = local;
     try {
-      if (msg.type == 'image' && !msg.content.containsKey('attachment_id')) {
+      if (_media.containsKey(msg.type) &&
+          !msg.content.containsKey('attachment_id')) {
         msg = await _upload(msg);
       }
       final resp = await api.sendMessage(
         to: msg.to,
         type: msg.type,
-        content: msg.type == 'image'
-            ? {
-                for (final k in ['attachment_id', 'ticket', 'width', 'height'])
-                  k: msg.content[k],
-              }
-            : msg.content,
+        content: switch (_media[msg.type]) {
+          final keys? => {for (final k in keys) k: msg.content[k]},
+          null => msg.content,
+        },
         clientMsgId: msg.clientMsgId,
       );
       final r = await store.upsertMessage(
@@ -268,14 +306,23 @@ class ImSender {
     }
   }
 
-  /// 取字节 → 解宽高 → 上传；成功后把 `{attachment_id, ticket, width, height}` 写回本地，重发时不再上传。
+  /// 要先上传的类型 → 发送时 content 带哪些键。
+  static const _media = {
+    'image': ['attachment_id', 'ticket', 'width', 'height'],
+    'voice': ['attachment_id', 'ticket', 'duration'],
+  };
+
+  /// 取字节 →（图片解宽高）→ 上传；成功后把附件 id、凭证等写回本地，重发时不再上传。
   Future<ImMessage> _upload(ImMessage msg) async {
     final cid = msg.clientMsgId;
+    final voice = msg.type == 'voice';
     var bytes = _bytes[cid];
     if (bytes == null) {
       final path = msg.localPath;
       if (path == null || !canReadFiles) {
-        throw _LocalFailure('IMAGE_MISSING', '原图已不在内存中，无法重发');
+        throw voice
+            ? _LocalFailure('VOICE_MISSING', '语音已不在内存中，无法重发')
+            : _LocalFailure('IMAGE_MISSING', '原图已不在内存中，无法重发');
       }
       try {
         bytes = await readFileBytes(path);
@@ -283,22 +330,26 @@ class ImSender {
         throw _LocalFailure('FILE_READ', e.toString());
       }
     }
-    final ({int width, int height}) size;
-    try {
-      size = await imageSize(bytes);
-    } catch (e) {
-      throw _LocalFailure('IMAGE_DECODE', '无法识别图片：$e');
+    ({int width, int height})? size;
+    if (!voice) {
+      try {
+        size = await imageSize(bytes);
+      } catch (e) {
+        throw _LocalFailure('IMAGE_DECODE', '无法识别图片：$e');
+      }
     }
     final filename =
         _filenames[cid] ??
-        (msg.localPath == null ? 'image.jpg' : p.basename(msg.localPath!));
-    final up = await api.upload(bytes, filename);
+        (msg.localPath == null
+            ? (voice ? 'voice.m4a' : 'image.jpg')
+            : p.basename(msg.localPath!));
+    final up = await api.upload(bytes, filename, kind: msg.type);
     final withAttachment = msg.copyWith(
       content: {
+        ...msg.content,
         'attachment_id': up.attachmentId,
         'ticket': up.ticket,
-        'width': size.width,
-        'height': size.height,
+        if (size != null) ...{'width': size.width, 'height': size.height},
         'url': up.url,
       },
     );

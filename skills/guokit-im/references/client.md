@@ -24,6 +24,7 @@ HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <
 3. 用列表里的 `unread` / `read_seq` 刷新角标，或 `GET /unread` 取 `total`（不计免打扰会话）。
 4. 带上次保存的 `next_cursor` 调 `GET /conversations/changes?cursor=`，逐项按下面 `conversation_changed` 的规则应用；
    `has_more` 为真就接着翻，每页都保存 `next_cursor`（为空不存）。离线期间别的设备删掉的会话只能从这里知道。
+5. 同样的用法调 `GET /recalls?cursor=`，按 `message_id` 替换本地已有的消息与会话预览，本地没有的不插入。
 
 `seq <= clear_seq` 的消息本人看不到、服务端也不再返回：会话的 `clear_seq` 变大时删掉本地这些消息，
 补拉起点取 `max(本地最大 seq, clear_seq)`，晚到的旧消息直接丢弃。
@@ -35,6 +36,9 @@ HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <
 - `read_all`：所有会话未读清零（或重拉会话列表）。
 - `conversation_changed`：用 `conversation` 覆盖本地设置，不必看 `action`。按 `clear_seq` 删本地旧消息；
   `visible` 为 false 时把会话和它的全部消息一起删掉（本地已有 `seq > clear_seq` 的消息说明结果晚到，只清不删）。
+- `message_recalled`：本地有这个会话就用 `message` 替换那条（`type` 为 `recalled`），没有就忽略；撤回不可逆，旧版本不再覆盖；是最后一条时换会话预览，清掉已下载的图片与语音。
+- `peer_read`：对方读到 `peer_read_seq`，只进不退。
+- `typing`：`from` 正在输入，`expires_in` 秒后或收到他的消息时收起。自己输入时最多每 3 秒调一次 `POST /conversations/{id}/typing`。
 
 ## 3. 发送
 
@@ -51,6 +55,10 @@ HTTP 前缀 `https://<IM 域名>/api/im/v1`，请求头 `Authorization: Bearer <
 图片：`POST /upload`（multipart，字段 `file`，只收 JPEG/PNG/GIF/WebP）→ 拿 `attachment_id` + `ticket` →
 发 `{"type":"image","content":{"attachment_id":…,"ticket":"…","width":…,"height":…}}`。
 收到的上传图 content 带 `url`（约 24 小时有效）：本地按 `attachment_id` 缓存图片文件；加载失败（403/404）时重新拉该消息拿新 `url`。
+
+语音：`POST /upload` 带表单字段 `kind=voice`（只收 m4a / mp3，≤2MB）→ 发 `{"type":"voice","content":{"attachment_id":…,"ticket":"…","duration":3}}`（1–60 的整数秒）。收到的 content 为 `{attachment_id, duration, size, mime, url}`，`url` 规则同图片。
+
+撤回：`GET /me` 的 `features.recall_minutes` 大于 0 且在时限内才显示「撤回」，调 `POST /messages/{id}/recall`，`IM_RECALL_NOT_ALLOWED` 直接显示 `message`。已读：`features.read_receipt` 为真时，自己发的 `seq <= peer_read_seq`（会话列表项）的消息显示「已读」。
 
 ## 4. Flutter（pub 包 `centrifuge`，默认 Protobuf，publication 的 data 是字节）
 
@@ -89,6 +97,12 @@ Future<centrifuge.Client> connectIm(String token) async {
         store.clearAllUnread();
       case 'conversation_changed':
         store.applyConvSettings(ev['conversation']);   // 规则见 §2
+      case 'message_recalled':
+        store.applyRecall(ev['message']);              // 规则见 §2
+      case 'peer_read':
+        store.setPeerReadSeq(ev['conversation_id'] as int, ev['peer_read_seq'] as int);
+      case 'typing':
+        showTyping(ev['conversation_id'] as int, ev['from'] as String);
     }
   });
 
@@ -129,7 +143,7 @@ export function connectIm(token: string) {
     }
   });
   c.on('publication', async (ctx) => {          // 服务端订阅推送
-    const ev = ctx.data as { event: string; conversation_id?: number; seq?: number; read_seq?: number; message?: unknown; conversation?: unknown };
+    const ev = ctx.data as { event: string; conversation_id?: number; seq?: number; read_seq?: number; peer_read_seq?: number; from?: string; message?: unknown; conversation?: unknown };
     if (ev.event === 'message') {
       const local = store.maxSeq(ev.conversation_id!);
       if (ev.seq! > local + 1) await pullAfter(ev.conversation_id!, local);
@@ -140,6 +154,12 @@ export function connectIm(token: string) {
       store.clearAllUnread();
     } else if (ev.event === 'conversation_changed') {
       store.applyConvSettings(ev.conversation);  // 规则见 §2
+    } else if (ev.event === 'message_recalled') {
+      store.applyRecall(ev.message);             // 规则见 §2
+    } else if (ev.event === 'peer_read') {
+      store.setPeerReadSeq(ev.conversation_id!, ev.peer_read_seq!);
+    } else if (ev.event === 'typing') {
+      showTyping(ev.conversation_id!, ev.from!);
     }
   });
   c.connect();

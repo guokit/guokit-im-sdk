@@ -12,6 +12,7 @@ class _Data {
   final Map<int, ImConversation> conversations = {};
   final Map<int, int> synced = {};
   String? changesCursor;
+  String? recallsCursor;
 
   /// local_id → 消息，local_id 自增，即插入顺序。
   final Map<int, ImMessage> messages = {};
@@ -155,6 +156,26 @@ class MemoryImStore implements ImStore {
   @override
   Future<void> setChangesCursor(String cursor) async =>
       _d.changesCursor = cursor;
+
+  @override
+  Future<String?> recallsCursor() async => _d.recallsCursor;
+
+  @override
+  Future<void> setRecallsCursor(String cursor) async =>
+      _d.recallsCursor = cursor;
+
+  @override
+  Future<ImConversation?> setPeerReadSeq(
+    int conversationId,
+    int peerReadSeq,
+  ) async {
+    final d = _d;
+    final c = d.conversations[conversationId];
+    if (c == null || peerReadSeq <= (c.peerReadSeq ?? -1)) return c;
+    return d.conversations[conversationId] = c.copyWith(
+      peerReadSeq: peerReadSeq,
+    );
+  }
 
   @override
   Future<int> syncedSeq(int conversationId) async =>

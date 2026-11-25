@@ -21,6 +21,7 @@ class ImSync {
     required this.onMessageUpdated,
     required this.onChanged,
     required this.onError,
+    required this.onTyping,
   });
 
   final ImApi api;
@@ -29,10 +30,10 @@ class ImSync {
   /// 当前登录用户。
   final String me;
 
-  /// 新入库的消息（推送、对账补拉、跳号补拉入库的；翻历史不算）。
+  /// 新入库的消息（推送、对账补拉、跳号补拉入库的；翻历史、已撤回的不算）。
   final void Function(ImMessage) onNewMessage;
 
-  /// 本设备未确认（sending / failed）的消息被服务端版本合并成 sent。
+  /// 本设备未确认（sending / failed）的消息被服务端版本合并成 sent；消息变成已撤回（不分本人与对方）。
   final void Function(ImMessage) onMessageUpdated;
 
   /// 会话或未读有变化，门面据此推快照与总未读。
@@ -40,6 +41,9 @@ class ImSync {
 
   /// 队列任务失败（门面只关心 [ImKickedOutException]，其余忽略）。
   final void Function(Object error) onError;
+
+  /// 收到「正在输入」。不进队列：对账在跑时也要立刻显示。
+  final void Function(int conversationId, String from, Duration ttl) onTyping;
 
   /// 补拉一页的条数（服务端上限 100）。
   static const int pullLimit = 100;
@@ -77,7 +81,27 @@ class ImSync {
   });
 
   /// 排一条推送（长连接 publication 解码后的 Map）。
-  Future<void> handlePush(Map<String, dynamic> ev) => _enqueue(() => _push(ev));
+  Future<void> handlePush(Map<String, dynamic> ev) {
+    if (ev['event'] == 'typing') {
+      if (!_closed) {
+        onTyping(
+          (ev['conversation_id'] as num).toInt(),
+          ev['from'] as String,
+          Duration(seconds: (ev['expires_in'] as num?)?.toInt() ?? 6),
+        );
+      }
+      return Future<void>.value();
+    }
+    return _enqueue(() => _push(ev));
+  }
+
+  /// 排一次撤回应用（本设备撤回接口返回后调）。进队列，不与在途的对账交错。
+  Future<void> applyRecall(Map message) => _enqueue(() async {
+    await ingest((message['conversation_id'] as num).toInt(), [
+      message,
+    ], notify: false);
+    await onChanged();
+  });
 
   /// 排一次会话设置应用（本设备的置顶 / 免打扰 / 清空 / 删除接口返回后调）。进队列，不与补拉交错。
   Future<void> applySettings(Map settings) => _enqueue(() async {
@@ -104,7 +128,10 @@ class ImSync {
     // 「已删除」只能从这里知道。旧版服务端没有这个接口，失败不影响下面的补拉，下次对账再补。
     await _tolerate(_pullChanges);
 
-    // 3. 只补拉拉过消息（syncedSeq > 0）且落后的会话；从没拉过的等打开时由 messages() 拉最新一页。
+    // 3. 补齐离线期间的撤回。撤回不产生新 seq，补拉拿不到。旧版服务端没有这个接口，同样容错。
+    await _tolerate(_pullRecalls);
+
+    // 4. 只补拉拉过消息（syncedSeq > 0）且落后的会话；从没拉过的等打开时由 messages() 拉最新一页。
     for (final c in await store.listConversations()) {
       final synced = await store.syncedSeq(c.id);
       if (synced > 0 && synced < c.maxSeq) {
@@ -133,6 +160,47 @@ class ImSync {
       cursor = r.nextCursor;
       if (cursor.isEmpty) return;
       await store.setChangesCursor(cursor);
+      if (!r.hasMore) return;
+    }
+  }
+
+  /// 只更新本地已有的消息与会话预览，不插入：新装机第一次会拿到全部历史撤回，
+  /// 本地没有的拉到时自然是撤回后的形态。
+  Future<void> _pullRecalls() async {
+    var cursor = await store.recallsCursor();
+    while (true) {
+      final r = await api.recalls(cursor: cursor, limit: 200);
+      if (_closed) return;
+      for (final it in r.items) {
+        final id = (it['conversation_id'] as num).toInt();
+        final message = it['message'] as Map;
+        if (await store.getMessageById((it['message_id'] as num).toInt()) !=
+            null) {
+          await ingest(id, [message], notify: false);
+          continue;
+        }
+        final conv = await store.getConversation(id);
+        final last = conv?.lastMessage;
+        if (last != null &&
+            last.type != 'recalled' &&
+            last.seq == (it['seq'] as num).toInt()) {
+          final m = ImMessage.fromServer(message, me: me);
+          await store.upsertConversations([
+            conv!.copyWith(
+              lastMessage: ImMessagePreview(
+                seq: last.seq,
+                from: last.from,
+                type: m.type,
+                preview: previewOf(m),
+                createdAt: last.createdAt,
+              ),
+            ),
+          ]);
+        }
+      }
+      cursor = r.nextCursor;
+      if (cursor.isEmpty) return;
+      await store.setRecallsCursor(cursor);
       if (!r.hasMore) return;
     }
   }
@@ -189,6 +257,16 @@ class ImSync {
         );
       case 'read_all':
         await store.markAllRead();
+      case 'message_recalled':
+        final convId = (ev['conversation_id'] as num).toInt();
+        // 本地没有这个会话（从没聊过，或已删除）就忽略：入库会建占位会话，让已删的会话复活。
+        if (await store.getConversation(convId) == null) return;
+        await ingest(convId, [ev['message'] as Map], notify: false);
+      case 'peer_read':
+        await store.setPeerReadSeq(
+          (ev['conversation_id'] as num).toInt(),
+          (ev['peer_read_seq'] as num).toInt(),
+        );
       case 'conversation_changed':
         // 每次都带完整设置，不必按 action 推算：清空看 clear_seq，删除看 visible。
         await _applySettings(ev['conversation'] as Map);
@@ -228,7 +306,8 @@ class ImSync {
   }
 
   /// 把服务端消息对象转模型并入库。[notify] 为 true 时新插入的发 [onNewMessage]；
-  /// 不论 [notify]，本设备未确认的消息被合并成 sent 时发 [onMessageUpdated]。
+  /// 不论 [notify]，本设备未确认的消息被合并成 sent、本地消息变成已撤回时发 [onMessageUpdated]。
+  /// 离线期间「发了又撤」的新插入不发 [onNewMessage]（App 不该弹新消息提醒），改发 [onMessageUpdated]。
   /// 清空 / 删除范围内的消息丢弃（清空的由存储层按 `clearSeq` 挡，删除的会话行已没了，在这里挡）。
   Future<void> ingest(
     int conversationId,
@@ -243,7 +322,12 @@ class ImSync {
           ImMessage.fromServer(j, me: me, peerId: conv?.peer.userId),
     ];
     final prev = <int, ImMessageStatus>{};
+    final wasRecalled = <int>{};
     for (var i = 0; i < msgs.length; i++) {
+      if (msgs[i].isRecalled && msgs[i].id != null) {
+        final p = await store.getMessageById(msgs[i].id!);
+        if (p != null && p.isRecalled) wasRecalled.add(i);
+      }
       if (!msgs[i].isSelf) continue;
       final p = await store.getMessageByClientMsgId(me, msgs[i].clientMsgId);
       if (p != null) prev[i] = p.status;
@@ -251,7 +335,11 @@ class ImSync {
     final results = await store.upsertMessages(msgs);
     for (var i = 0; i < results.length; i++) {
       final r = results[i];
-      if (r.inserted) {
+      if (msgs[i].isRecalled) {
+        // 增量与推送会重复给，只在真的变成撤回时发。
+        final changed = r.inserted ? notify : !wasRecalled.contains(i);
+        if (changed && r.message.isRecalled) onMessageUpdated(r.message);
+      } else if (r.inserted) {
         if (notify) onNewMessage(r.message);
       } else if (prev[i] != null && prev[i] != ImMessageStatus.sent) {
         onMessageUpdated(r.message);

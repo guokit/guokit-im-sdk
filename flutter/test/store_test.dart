@@ -186,6 +186,51 @@ void main() {
         expect(await s.unconfirmedMessages('u2'), isEmpty);
         expect((await s.messages(2)).single.id, 9);
       });
+
+      test('撤回不可逆：内容与预览替换、localPath 清空，旧版本与旧列表不覆盖', () async {
+        final orig = _msg(id: 5, seq: 5, from: 'u1', cid: 'r');
+        await s.upsertMessage(orig.copyWith(localPath: '/a.jpg'));
+        await s.upsertConversations([
+          (await s.getConversation(1))!.copyWith(
+            lastMessage: ImMessagePreview(
+              seq: 5,
+              from: 'u1',
+              type: 'text',
+              preview: 'hi r',
+              createdAt: _t0,
+            ),
+          ),
+        ]);
+        final stale = (await s.getConversation(1))!; // 在途的旧列表
+        await s.upsertMessage(
+          orig.copyWith(type: 'recalled', content: {'by': 'sender'}),
+        );
+        await s.upsertMessage(orig);
+        await s.upsertConversations([stale]);
+        final m = (await s.getMessageById(5))!;
+        expect(
+          (m.isRecalled, m.recalledBy, m.content['text'], m.localPath),
+          (true, 'sender', null, null),
+        );
+        final c = (await s.getConversation(1))!;
+        expect(
+          (c.lastMessage!.preview, c.maxSeq, c.readSeq),
+          ('[消息已撤回]', 5, 5),
+        );
+      });
+
+      test('对方已读只进不退；服务端不给时置 null', () async {
+        expect((await s.getConversation(1))!.peerReadSeq, null);
+        await s.setPeerReadSeq(1, 4);
+        await s.setPeerReadSeq(1, 2);
+        expect((await s.getConversation(1))!.peerReadSeq, 4);
+        await s.upsertConversations([
+          _conv(1, 'u2', maxSeq: 5).copyWith(peerReadSeq: 3),
+        ]);
+        expect((await s.getConversation(1))!.peerReadSeq, 4);
+        await s.upsertConversations([_conv(1, 'u2', maxSeq: 5)]);
+        expect((await s.getConversation(1))!.peerReadSeq, null);
+      });
     });
   });
 
@@ -265,7 +310,10 @@ void main() {
     expect(await s.syncedSeq(1), 3);
     expect((await s.messages(1)).single.senderRole, null);
     await s.setChangesCursor('a');
-    expect(await s.changesCursor(), 'a');
+    await s.setRecallsCursor('b');
+    expect((await s.changesCursor(), await s.recallsCursor()), ('a', 'b'));
+    expect(c.peerReadSeq, null);
+    expect((await s.setPeerReadSeq(1, 2))!.peerReadSeq, 2);
     await s.clearMessages(1, 5);
     expect((await s.getConversation(1))!.clearSeq, 5);
   });

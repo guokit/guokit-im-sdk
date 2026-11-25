@@ -1,5 +1,5 @@
 name: guokit_im_example
-description: guokit_im 最小示例：登录、会话列表、收发文本与图片。
+description: guokit_im 最小示例：登录、会话列表、收发文本、图片与语音、撤回、已读、正在输入。
 publish_to: none
 version: 0.1.0
 
@@ -7,10 +7,13 @@ environment:
   sdk: '>=3.10.3 <4.0.0'
 
 dependencies:
+  audioplayers: ^6.8.1
   flutter:
     sdk: flutter
   guokit_im:
     path: ../
+  path_provider: ^2.1.6
+  record: ^7.2.0
 
 dev_dependencies:
   flutter_lints: ^5.0.0

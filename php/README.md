@@ -12,7 +12,7 @@
     { "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }
   ],
   "require": {
-    "guokit/im": "^0.7"
+    "guokit/im": "^0.8"
   }
 }
 ```
@@ -53,7 +53,8 @@ try {
 | `setConversationSettings($userId, $peerId, array $settings)` | 置顶 / 免打扰：`['pinned'=>bool, 'muted'=>bool]`，至少一个 |
 | `clearConversation($userId, $peerId)` | 清空该用户这一侧的聊天记录 |
 | `deleteConversation($userId, $peerId)` | 删除会话（清空 + 移出列表 + 取消置顶，免打扰保留） |
-| `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式 |
+| `sendMessage($from, $to, $type, array $content, $clientMsgId)` | 以某用户身份代发；图片请用外链 `url` 形式，语音不能代发 |
+| `recallMessage(int $messageId)` | 撤回消息，不限时，返回撤回后的消息对象（`type` 为 `recalled`）；不存在抛 `VALIDATION`（HTTP 404）。需服务端 ≥ v1.17.0 |
 | `history($conversationId, $afterSeq = null, $beforeSeq = null, $limit = 30)` | 查会话历史（审计） |
 | `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |
 
@@ -63,7 +64,7 @@ try {
 
 必须用**原始请求体**验签，不要先 `json_decode` 再编码。时间戳须为数字且与当前相差不超过 300 秒（第 5 个参数可改）。
 
-`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `user_state` / `resolve_user`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
+`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
 
 响应体用 `Callback::allow()`、`Callback::reject('原因')`、`Callback::ack()` 生成（均返回 JSON 字符串）。
 
