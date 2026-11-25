@@ -161,6 +161,7 @@ class Client
      * 建或改一个客服主体，返回 service_id 与 user_id（用户给它发消息用的 `@cs:<主体标识>`）。
      *
      * @param array|null $settings welcome_text / queue_text / offline_text / timeout_minutes / rating_enabled / visitor_enabled，
+     *                             v1.21.0 起另有 timeout_text / transfer_text，文案给空串是不发；
      *                             没给的用站点设置；传 null 不改已有设置，传数组整个替换
      */
     public function upsertService(string $serviceId, string $name, string $avatarUrl = '', ?array $settings = null): array
@@ -172,7 +173,7 @@ class Client
         return $this->call('PUT', $this->servicePath($serviceId), ['json' => $body], self::CS_PREFIX);
     }
 
-    /** 1 启用，0 停用（用户发不进来，未结束的接待结束，坐席令牌失效） */
+    /** 1 启用，0 停用（用户发不进来，未结束的接待结束，坐席断开）。平台停用的（blocked=1）你方启用了也不接待。 */
     public function setServiceStatus(string $serviceId, int $status): array
     {
         return $this->call('PATCH', $this->servicePath($serviceId), ['json' => ['status' => $status]], self::CS_PREFIX);
@@ -182,6 +183,35 @@ class Client
     public function serviceSummary(string $serviceId): array
     {
         return $this->call('GET', $this->servicePath($serviceId) . '/summary', [], self::CS_PREFIX);
+    }
+
+    /** 主体列表，对账用；返回 items 与 next_cursor（空串是没有了）。需服务端 ≥ v1.21.0，下同。 */
+    public function services(string $cursor = '', int $limit = 50): array
+    {
+        return $this->call('GET', '/services', ['query' => ['cursor' => $cursor, 'limit' => $limit]], self::CS_PREFIX);
+    }
+
+    /** 主体在职的全部坐席 */
+    public function serviceAgents(string $serviceId): array
+    {
+        return $this->call('GET', $this->servicePath($serviceId) . '/agents', [], self::CS_PREFIX)['items'] ?? [];
+    }
+
+    /**
+     * 坐席整份替换：多的移除，少的补上，没变的不动；空数组是全部移除。最多 500 个，external_id 不区分大小写、不能重复。
+     *
+     * @param array $agents ['external_id'=>…, 'nickname'=>…, 'max_concurrent'=>…（可选）]
+     * @return array added / updated / removed
+     */
+    public function replaceServiceAgents(string $serviceId, array $agents): array
+    {
+        return $this->call('PUT', $this->servicePath($serviceId) . '/agents', ['json' => ['agents' => array_values($agents)]], self::CS_PREFIX);
+    }
+
+    /** 主体未结束的接待（排队中与接待中），最多 200 条 */
+    public function serviceSessions(string $serviceId): array
+    {
+        return $this->call('GET', $this->servicePath($serviceId) . '/sessions', [], self::CS_PREFIX)['items'] ?? [];
     }
 
     /**
@@ -209,7 +239,7 @@ class Client
         return $this->call('PUT', $this->agentPath($serviceId, $externalId), ['json' => $body], self::CS_PREFIX);
     }
 
-    /** 移除坐席：令牌失效、断开，接待中的转回排队。 */
+    /** 移除坐席：令牌失效、断开，接待中的转回排队。本来就不在的也算成功（服务端 ≥ v1.21.0）。 */
     public function removeServiceAgent(string $serviceId, string $externalId): array
     {
         return $this->call('DELETE', $this->agentPath($serviceId, $externalId), [], self::CS_PREFIX);

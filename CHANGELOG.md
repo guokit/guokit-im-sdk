@@ -2,6 +2,16 @@
 
 两个 SDK（Flutter `guokit_im`、PHP `guokit/im`）共用仓库版本号。
 
+## 未发布
+
+客服主体接待补全。需要 IM 服务端 v1.21.0。
+
+- **PHP**：新增 `services`、`serviceAgents`、`replaceServiceAgents`、`serviceSessions`；回调事件加 `cs_session`（透传，`Callback` 不用改）
+- **Flutter**：代码不变
+- **注意**：主体 / 坐席不存在、主体停用的错误码由 `VALIDATION` 改为 `CS_SERVICE_NOT_FOUND`、`CS_AGENT_NOT_FOUND`、`CS_SERVICE_DISABLED`；`settings` 的文案给空串由「用站点设置」改为「不发」；开了 before_send 的站点会收到主体坐席的回复（`from` 为 `@cs:<主体标识>`），请放行或审核
+- 工作台嵌入接口只加不改：`onReady`、`onError`、`open`、`back`，`onRemind` 多一个参数，`onTokenExpired` 会重复回调
+- 接入文档 §10.11 大改，§8.1、§4.10 补充；OpenAPI、Skill、`llms-full.txt` 同步
+
 ## v0.10.0 — 2026-11-25
 
 客服主体：一个站点里多个各自接待的客服（如每家门店一个）。需要 IM 服务端 v1.20.0；旧服务端上给主体发消息为用户不存在，`csState(serviceId)` 会给平台客服的状态，其余功能不受影响。**旧版 App 会先把主体会话当成普通单聊显示，请等用户都升级后再放出入口。**

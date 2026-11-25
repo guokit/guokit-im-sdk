@@ -64,6 +64,7 @@
 | 200 | `IM_MESSAGE_REJECTED` | 消息被发送前回调拒绝，`message` 形如 `消息被拒绝：<原因>` |
 | 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），`message` 为「对方已将你拉黑」 |
 | 200 | `IM_RECALL_NOT_ALLOWED` | 不能撤回：站点没开启撤回，或超过时限（§5.12），`message` 说明原因 |
+| 200 | `CS_SERVICE_NOT_FOUND` / `CS_AGENT_NOT_FOUND` / `CS_SERVICE_DISABLED` | 客服主体不存在 / 坐席不存在 / 主体已停用（§10.11 的服务端接口） |
 | 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息超限（§9） |
 | 403 | `FORBIDDEN` | 客户端访问了自己不在其中（或不存在）的会话 |
 | 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10）。消息不存在：撤回时（§4.10、§5.12），不是本人发的也按不存在 |
@@ -260,7 +261,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 ### 4.10 撤回消息 `POST /messages/{id}/recall`
 
 无请求体，返回撤回后的消息对象。**不限时、不看站点的撤回开关**，用于处理违规内容。效果与用户自己撤回相同（§5.12），`content.by` 为 `server`。
-渠道用户（网页访客、微信）参与的会话、客服发的消息都按不存在处理，回 404 `VALIDATION`。已撤回的再调返回同一结果，不再推送、不再回调。
+渠道用户（网页访客、微信）参与的会话、平台客服发的消息都按不存在处理，回 404 `VALIDATION`；客服主体（§10.11）的坐席发的可以撤，收的人是访客也行。已撤回的再调返回同一结果，不再推送、不再回调。
 撤回后 §4.6 的审计查询也只给撤回后的形态，**原文只在 IM 后台的「消息查询」里看得到**。
 
 ## 5. 客户端接口（App / Web 调用）
@@ -781,7 +782,7 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 ### 8.1 before_send（同步）
 
-- 时机：开启发送前回调且配了地址时，每条新消息在通过参数校验、幂等检查与限速之后、**入库之前**调用。服务端代发（§4.5）同样触发，可按 `from` 自行放行。
+- 时机：开启发送前回调且配了地址时，每条新消息在通过参数校验、幂等检查与限速之后、**入库之前**调用。服务端代发（§4.5）同样触发，可按 `from` 自行放行。客服主体的坐席回复也触发（§10.11）：`from` 为 `@cs:<主体标识>`，`data` 多带 `agent_external_id`。
 - 超时 2 秒，不重试。
 - `data`：`{from, to, type, content, client_msg_id, from_source, to_source}`（来源取值见 §8.5）；`content` 是规整后的内容（上传图为 `{attachment_id, width, height}`，语音为 `{attachment_id, duration, size, mime}`，文件为 `{attachment_id, name, size, mime}`，视频为 `{attachment_id, duration, width, height, size, mime, cover_attachment_id}`，都不含 ticket 与链接，**看不到文件内容**；要按内容审核，在 after_send 里用链接取）。
 - 期望响应：HTTP 200 且
@@ -1073,7 +1074,7 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 }
 ```
 
-客服发出的消息**不经过 before_send**（坐席是站点自己人），所以 before_send 里只会看到用户发给 `@cs` 的方向。
+平台客服发出的消息**不经过 before_send**（坐席是站点自己人），所以 before_send 里只会看到用户发给 `@cs` 的方向。其他客服主体的坐席是你方员工，他们的回复经过（§10.11）。
 
 ### 10.7 网页客服
 
@@ -1168,7 +1169,7 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 
 ### 10.11 客服主体：一个站点里多个各自接待的客服
 
-平台型业务里，每家门店、每个商户、每个部门都要有自己的客服，由自己的员工接待。每一个这样的客服叫一个**主体**，由你方后端经接口维护；平台客服 `@cs` 是默认主体，照旧在后台配置。需要 IM 服务端 v1.20.0。
+平台型业务里，每家门店、每个商户、每个部门都要有自己的客服，由自己的员工接待。每一个这样的客服叫一个**主体**，由你方后端经接口维护；平台客服 `@cs` 是默认主体，照旧在后台配置。需要 IM 服务端 v1.20.0，标了版本的另看。
 
 | | 默认主体（平台客服） | 其他主体 |
 |---|---|---|
@@ -1179,6 +1180,8 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 | 机器人、留言、工单、微信渠道 | 有 | 没有 |
 
 主体之间完全隔离：坐席只看得到本主体的会话、历史、快捷回复，只能转给本主体的坐席。平台管理员在后台能看各主体的接待记录、能停用主体。
+
+同一主体的坐席互相看得到（v1.21.0）：排队中的、同事接待中的、30 天内已结束的都能点开看，能接管、能重开该用户最近一次已结束的接待。**接管不用原接待人同意**，他会收到提示。
 
 #### 用户侧
 
@@ -1194,12 +1197,20 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 | 方法 | 路径 | 请求体 | 说明 |
 |---|---|---|---|
 | PUT | `/services/{sid}` | `{"name", "avatar_url"?, "settings"?}` | 建或改。没传 `settings` 不改设置，传了整个替换；不改启停 |
-| PATCH | `/services/{sid}` | `{"status": 0\|1}` | 停用：用户发不进来，未结束的接待结束，坐席令牌失效并断开 |
-| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "max_concurrent"?}` | 建或改坐席；移除过的重新启用。新坐席默认在线（要打开工作台连上了才分得到接待），之后以他自己设的为准 |
-| DELETE | `/services/{sid}/agents/{external_id}` | 无 | 移除：令牌失效、断开，接待中的转回排队。历史接待里仍显示这名坐席 |
+| PATCH | `/services/{sid}` | `{"status": 0\|1}` | 你方的启停。停用：用户发不进来，未结束的接待结束，坐席断开 |
+| GET | `/services?cursor=&limit=` | — | 主体列表，`items` 含 `service_id, name, status, blocked, updated_at`，`next_cursor` 空串是没有了。v1.21.0 |
+| GET | `/services/{sid}/summary` | — | 资料、设置、`status`、`blocked`、坐席数 `agents`、在线坐席 `agents_online`、排队 `queue_count` |
+| GET | `/services/{sid}/agents` | — | 在职的全部坐席：`external_id, nickname, agent_id, max_concurrent, status`（他自己设的）`, connected`（工作台此刻连着没有）。v1.21.0 |
+| PUT | `/services/{sid}/agents` | `{"agents": [{"external_id", "nickname", "max_concurrent"?}]}` | **整份替换**：多的移除，少的补上，没变的不动，空数组是全部移除。≤500 个。先全部校验再逐个做，出错可整份重试；回 `{added, updated, removed}`。v1.21.0 |
+| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "max_concurrent"?}` | 建或改一名坐席；移除过的重新启用。新坐席默认在线（要打开工作台连上了才分得到接待），之后以他自己设的为准 |
+| DELETE | `/services/{sid}/agents/{external_id}` | 无 | 移除：令牌失效、断开，接待中的转回排队。历史接待里仍显示这名坐席；本来就不在的也算成功 |
 | POST | `/services/{sid}/agents/{external_id}/token` | 无 | 签坐席令牌，返回 `{"token", "expires_at"}` |
-| GET | `/services/{sid}/summary` | — | 资料、设置、坐席数 `agents`、在线坐席 `agents_online`、排队 `queue_count` |
+| GET | `/services/{sid}/sessions` | — | 未结束的接待，最近有消息的在前，最多 200 条：`session_id, user_id, status`（`queued` / `active`）`, agent_external_id, agent_online, unread, queued_at, last_msg_at`。v1.21.0 |
 | POST | `/services/batch` | `{"services": [{"service_id", "name", …, "agents": [{"external_id", "nickname", …}]}]}` | 首次导入用，每批最多 100 个主体、合计 500 个坐席；遇错即停并指出第几个，可整批重试 |
+
+- 员工标识**不区分大小写**，`Tom` 与 `tom` 是同一名坐席。
+- `blocked` 为 `1` 是**平台停用**，你方打不开；`status` 与 `blocked` 都开着才接待。
+- 主体不存在 `CS_SERVICE_NOT_FOUND`、坐席不存在 `CS_AGENT_NOT_FOUND`、停用中不签令牌 `CS_SERVICE_DISABLED`，都是 HTTP 200 + 业务码（v1.21.0 起；之前是 400 `VALIDATION`）。
 
 ```bash
 curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
@@ -1207,7 +1218,13 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
   -d '{"name": "甲店客服", "avatar_url": "https://img.example.com/1.png", "settings": {"visitor_enabled": true}}'
 ```
 
-`settings` 的各项没给时用站点设置：`welcome_text` / `queue_text` / `offline_text`（≤200 字）、`timeout_minutes`（1–1440）、`rating_enabled`、`visitor_enabled`（允许没登录的网页访客咨询，默认不允许，站点也要打开）。
+`settings` 的各项没给时用站点设置：
+
+- 文案（≤200 字，**给空串是不发**）：`welcome_text`、`queue_text`、`offline_text`、`timeout_text`（超时结束）、`transfer_text`（转接、同事接管）
+- `timeout_minutes`（1–1440）：坐席最后一条之后这么久没动静，自动结束。**用户说了没人回的不会超时**，一直等人接
+- `rating_enabled`：结束后邀请评价；`visitor_enabled`：允许没登录的网页访客咨询，默认不允许，站点也要打开
+
+没人在时，同一段接待里的排队 / 离线提示半小时只发一次。
 
 你方要做的：主体、员工有变动时同步过来；员工离职、门店关停要及时移除或停用。没有坐席的主体照常收消息、排队。
 
@@ -1222,34 +1239,78 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
   const desk = GuokitDesk.mount("#desk", {
     token: "你方后端签的坐席令牌",
     onTokenExpired: async () => desk.setToken(await fetchDeskTokenFromYourBackend()),
+    onReady: () => {},                 // 工作台加载完，可以用了
+    onError: ({ code, message }) => {},// timeout / token_invalid / service_disabled
     onUnread: (count) => {},           // 未读数变了，可显示在菜单上
-    onRemind: (title, body) => {},     // 页面在后台时来了新消息，由你方弹通知
+    onRemind: (title, body, e) => {},  // 页面在后台、工作台藏着时来了新消息，由你方弹通知
   })
 </script>
 ```
 
-`desk.setToken(token)` 换员工（传空串退出），`desk.destroy()` 移除。工作台藏起来时（如切到你后台的其他菜单）调 `desk.setVisible(false)`，显示时 `desk.setVisible(true)`：藏起期间的新消息都算未读、都会回调 `onRemind`，不调的话正开着的那条会被当成已看。令牌有效 2 小时，页面自动续期；从签发起最长 12 小时，到时回调 `onTokenExpired`。**你方后端签令牌前必须自己确认该员工此刻有权限**，令牌泄露等于对方能以这名员工的身份接待。
+| 方法 | 说明 |
+|---|---|
+| `desk.setToken(token)` | 换令牌；换成另一名员工会整个重来，同一名员工换令牌不重来（没写完的内容、正打开的会话都在）；传空串退出 |
+| `desk.setVisible(bool)` | 你把工作台藏起来（如切到别的菜单）时传 `false`，显示时传 `true`。藏起期间的新消息都算未读、都会回调 `onRemind`；不调的话正开着的那条会被当成已看 |
+| `desk.open(sessionId)` | 打开一条接待，返回 Promise：自己的直接打开，同事的、已结束的只读打开，找不到为 `false`。`mount` 时给 `open: sessionId` 进来就打开。v1.21.0 |
+| `desk.back()` | 返回一步（关弹窗、关资料抽屉、回列表），返回 Promise，没有可返回的为 `false`。v1.21.0 |
+| `desk.destroy()` | 移除 |
 
-**在 App 里接待**（页面适配手机宽度）：用 WebView 打开 `https://im.example.com/imcs-desk#token=<坐席令牌>`，令牌放在 `#` 后面，不会发到服务器日志。页面给 App 的消息走名为 `GuokitDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `guokitdesk:ready` / `guokitdesk:token-expired` / `guokitdesk:unread`（带 `count`）/ `guokitdesk:remind`（带 `title`、`body`）；App 换令牌执行 `window.GuokitDesk.setToken("…")`，收到 `guokitdesk:ready`（含页面重新加载）也要给一次。App 切到别的页面、WebView 还留着时，执行 `window.GuokitDesk.setVisible(false)`，回来再传 `true`；页面重新加载后回到「显示」。发图片、文件要在 WebView 里放开文件选择。
+- `onRemind` 的第三个参数（v1.21.0）：`{kind, session_id, message_id}`，`kind` 为 `assigned`（新分到一条，没有 `message_id`）或 `message`。点通知时调 `desk.open(session_id)`；多个标签页用 `message_id` 去重。
+- `onTokenExpired`：令牌有效 2 小时，页面自动续期，从签发起最长 12 小时；被移除的也会失效。**没拿到能用的新令牌之前每 15 秒、以及网络恢复时会再回调一次**（v1.21.0），你那边失败了不用自己重试。
+- `onError`（v1.21.0）：`timeout` 是 15 秒没打开，多半是没进白名单或断网；`token_invalid` 是你给的令牌不成立；`service_disabled` 是主体停用，不会再要令牌，恢复后页面自己回来。
+- **你方后端签令牌前必须自己确认该员工此刻有权限**，令牌泄露等于对方能以这名员工的身份接待。
+
+同一名员工可以在电脑和手机上同时开着，回复、已读、在线状态互相同步（v1.21.0）。
+
+**在 App 里接待**（页面适配手机宽度）：用 WebView 打开 `https://im.example.com/imcs-desk#token=<坐席令牌>`（可再加 `&open=<接待 id>`），令牌放在 `#` 后面，不会发到服务器日志。
+
+- 页面给 App 的消息走名为 `GuokitDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `guokitdesk:ready`、`guokitdesk:loaded`（同 `onReady`）、`guokitdesk:error`（带 `code`、`message`）、`guokitdesk:token-expired`、`guokitdesk:unread`（带 `count`）、`guokitdesk:remind`（带 `title`、`body`、`kind`、`session_id`、`message_id`）。
+- App 调 `window.GuokitDesk` 上的 `setToken("…")`、`setVisible(bool)`、`open(id)`（返回 Promise）、`back()`（**同步返回** `true` / `false`，安卓返回键先调它，`false` 再退出页面）。
+- 收到 `guokitdesk:ready`（含页面重新加载）要给一次令牌。App 切到别的页面、WebView 还留着时 `setVisible(false)`，回来再传 `true`；页面重新加载后回到「显示」。
+- 发图片、文件要在 WebView 里放开文件选择；图片与文件是新窗口打开，交给系统浏览器。
 
 #### 员工不在线时的提醒
 
 工作台开着时由工作台提醒。没开时要推员工手机，靠 after_send（§8.2）：主体相关的消息 `data` 多带
 
-| 字段 | 说明 |
-|---|---|
-| service_id | 主体标识；两个方向都有，默认主体没有 |
-| agents_online | 用户 → 主体方向：此刻在线的坐席数 |
-| agent_external_id | 用户 → 主体方向：正在接待这位用户的员工，没有为空串 |
-| agent_online | 用户 → 主体方向：该员工是否在线 |
+| 字段 | 用户 → 主体 | 主体 → 用户 |
+|---|---|---|
+| service_id | 主体标识（默认主体没有） | 同左 |
+| agent_external_id | 正在接待这位用户的员工，没有为空串 | 这条是谁回的，系统提示为空串（v1.21.0） |
+| agents_online | 此刻在线的坐席数 | — |
+| agent_online | 该员工是否在线 | — |
 
-建议：`agent_external_id` 非空且 `agent_online` 为 `false` 时推那名员工；为空且 `agents_online` 为 `0` 时推该主体的全部员工。极少数查询失败的情况下后三项缺省，按 `0`、空串、`false` 处理。主体发给用户的消息，离线推送与普通客服消息相同。
+建议：`agent_external_id` 非空且 `agent_online` 为 `false` 时推那名员工；为空且 `agents_online` 为 `0` 时推该主体的全部员工。极少数查询失败的情况下后三项缺省，按 `0`、空串、`false` 处理。主体发给用户的消息，离线推送与普通客服消息相同。`after_send` 在分配之前产生：新接待的第一条还没有接待人。要知道后来分给了谁、有没有人回，用下面的回调，或隔一会儿查 `GET /services/{sid}/sessions`。
+
+#### 坐席消息的审核与撤回（v1.21.0）
+
+坐席是你方员工，不是站点自己人：站点开了发送前回调时，坐席的回复也走 before_send（§8.1），拒绝时坐席看到 `reason`；欢迎语等系统提示不走。已经发出的可以用 §4.10 撤回。
+
+#### 接待变化回调 cs_session（异步，v1.21.0）
+
+后台「IM 设置」打开「推送客服主体的接待变化」后（默认关），主体的接待每变一次投递一条，规则同 after_send。平台客服的不推。
+
+```json
+{ "id": 9031, "session_id": 305, "service_id": "shop_1001", "user_id": "u1001", "change": "requeued",
+  "agent_external_id": "", "from_agent_external_id": "e1", "reason": "", "at": "2026-11-25 10:00:30" }
+```
+
+| change | 何时 | agent_external_id | from_agent_external_id |
+|---|---|---|---|
+| queued | 新咨询进来，开始排队 | 空串 | 空串 |
+| assigned | 分给了某名员工 | 接到的 | 空串 |
+| transferred / claimed | 转接 / 被同事接管（从排队接起也是 claimed） | 接到的 | 原接待人，从排队接起为空串 |
+| requeued | 接待人被移除，转回排队 | 空串 | 被移除的 |
+| reopened | 已结束的被重开 | 重开的 | 原接待人 |
+| closed | 结束，`reason` 为 `agent` 坐席结束 / `timeout` 超时 / `disabled` 主体停用 | 最后的接待人 | 空串 |
+
+`id` 递增；失败会重试、可能乱序，**同一 `session_id` 以 `id` 大的为准**。将来可能增加 `change`，不认识的忽略。
 
 ## 11. SDK、接口规范与 AI 接入
 
 公开仓库 <https://github.com/guokit/guokit-im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
 
-- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。0.9.0 起提供文件与视频 `sendFile` / `sendVideo`（按路径发时边读边传）、`fileUrl` / `videoUrl` / `videoCoverUrl` 与上传进度 `onSendProgress`（§5.1、§5.6，需要服务端 v1.19.0）；选文件、压缩转码、截封面、播放、下载由 App 自己做。0.10.0 起提供客服主体 `csUserId` / `ImConversation.serviceId` 与 `csState(serviceId: …)`（§10.11，需要服务端 v1.20.0）。
+- **Flutter 客户端 SDK** `guokit_im`（`flutter/`）：令牌续期、断线对账补拉、本地消息缓存（iOS / Android 用 SQLite，Web 用内存）、发送重试与去重、图片上传与链接过期重拉，本文 §6、§7 的规则它都已实现。0.5.0 起提供会话设置 `setPinned` / `setMuted` / `clearConversation` / `deleteConversation`，并自动处理 `conversation_changed` 推送与 `/conversations/changes` 补齐（§5.10、§5.11 的本地处理规则不用自己写）。0.7.0 起提供留言 `leaveCs` 与 `ImCsState.canLeave`（§10.9）。0.8.0 起提供撤回 `recall`、语音 `sendVoice` / `voiceUrl`、对方已读 `peerReadSeq`、正在输入 `sendTyping` / `onTyping`，并自动处理 `message_recalled` 推送与 `/recalls` 补齐（§5.12–§5.15）。0.9.0 起提供文件与视频 `sendFile` / `sendVideo`（按路径发时边读边传）、`fileUrl` / `videoUrl` / `videoCoverUrl` 与上传进度 `onSendProgress`（§5.1、§5.6，需要服务端 v1.19.0）；选文件、压缩转码、截封面、播放、下载由 App 自己做。0.10.0 起提供客服主体 `csUserId` / `ImConversation.serviceId` 与 `csState(serviceId: …)`（§10.11，需要服务端 v1.20.0）。0.11.0 Flutter 无改动，PHP 补齐客服主体的对账接口。
 - **PHP 服务端 SDK** `guokit/im`（根目录 `composer.json`，代码在 `php/`）：本文 §4 的全部服务端接口与 §8 回调验签，PHP ≥ 8.0。
 - 两者先以 git 依赖分发，安装方式见仓库 README。
 
@@ -1732,7 +1793,7 @@ paths:
       operationId: serverRecallMessage
       summary: 撤回消息
       description: |
-        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、客服发的消息一律按不存在（404）。
+        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、平台客服发的消息一律按不存在（404）；其他客服主体的坐席发的可以撤（`content.by` 为 `server`）。
         已撤回的再调返回同一结果，不再推送、不再回调。
       security: [{ ApiKey: [] }]
       responses:
@@ -2633,7 +2694,7 @@ paths:
       operationId: csPatchService
       summary: 启用或停用主体
       description: |
-        停用后用户发不进来，未结束的接待静默结束，坐席令牌失效并断开。
+        停用后用户发不进来，未结束的接待静默结束，坐席断开。平台停用的（`blocked` 为 1）你方启用了也不接待。
       security: [{ ApiKey: [] }]
       parameters:
         - $ref: '#/components/parameters/ServiceIdPath'
@@ -2665,13 +2726,190 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/imcs/v1/server/services:
+    get:
+      tags: [客服主体]
+      operationId: csListServices
+      summary: 主体列表
+      description: 对账用，按建立先后翻页。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - { name: cursor, in: query, required: false, description: 上一页的 next_cursor, schema: { type: string } }
+        - { name: limit, in: query, required: false, description: 默认 50，最大 100, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items, next_cursor]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    service_id: { type: string }
+                                    name: { type: string }
+                                    status: { type: integer, enum: [0, 1] }
+                                    blocked: { type: integer, enum: [0, 1], description: 1 为平台停用 }
+                                    updated_at: { $ref: '#/components/schemas/DateTime' }
+                              next_cursor: { type: string, description: 空串是没有了 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/agents:
+    get:
+      tags: [客服主体]
+      operationId: csListAgents
+      summary: 坐席列表
+      description: 在职的全部坐席。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    external_id: { type: string }
+                                    nickname: { type: string }
+                                    agent_id: { type: integer, format: int64 }
+                                    max_concurrent: { type: integer }
+                                    status: { type: string, enum: [online, away, offline], description: 他自己设的 }
+                                    connected: { type: boolean, description: 工作台此刻连着没有 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    put:
+      tags: [客服主体]
+      operationId: csReplaceAgents
+      summary: 坐席整份替换
+      description: |
+        多的移除，少的补上，没变的不动；空数组是全部移除。最多 500 个，`external_id` 不区分大小写、不能重复。
+        先全部校验再逐个做，中途出错可整份重试。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agents]
+              properties:
+                agents:
+                  type: array
+                  maxItems: 500
+                  items:
+                    allOf:
+                      - $ref: '#/components/schemas/ServiceAgentInput'
+                      - type: object
+                        required: [external_id]
+                        properties:
+                          external_id: { type: string, pattern: '^[A-Za-z0-9_.@-]{1,64}$' }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [added, updated, removed]
+                            properties:
+                              added: { type: integer }
+                              updated: { type: integer }
+                              removed: { type: integer }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/sessions:
+    get:
+      tags: [客服主体]
+      operationId: csListOpenSessions
+      summary: 未结束的接待
+      description: 排队中与接待中的，最近有消息的在前，最多 200 条。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    session_id: { type: integer, format: int64 }
+                                    user_id: { type: string }
+                                    status: { type: string, enum: [queued, active] }
+                                    agent_external_id: { type: string, description: 接待的员工；排队中为空串 }
+                                    agent_online: { type: boolean, description: 该员工的工作台此刻连着没有 }
+                                    unread: { type: integer, description: 用户说了还没人看的条数 }
+                                    queued_at: { $ref: '#/components/schemas/DateTime' }
+                                    last_msg_at: { $ref: '#/components/schemas/DateTime' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/imcs/v1/server/services/{sid}/summary:
     get:
       tags: [客服主体]
       operationId: csServiceSummary
       summary: 主体资料与此刻的接待情况
       description: |
-        主体不存在回 400 `VALIDATION`。
+        主体不存在回 `CS_SERVICE_NOT_FOUND`。
       security: [{ ApiKey: [] }]
       parameters:
         - $ref: '#/components/parameters/ServiceIdPath'
@@ -2688,13 +2926,14 @@ paths:
                         properties:
                           data:
                             type: object
-                            required: [service_id, user_id, name, avatar_url, status, settings, agents, agents_online, queue_count]
+                            required: [service_id, user_id, name, avatar_url, status, blocked, settings, agents, agents_online, queue_count]
                             properties:
                               service_id: { type: string }
                               user_id: { type: string }
                               name: { type: string }
                               avatar_url: { type: string }
-                              status: { type: integer, enum: [0, 1] }
+                              status: { type: integer, enum: [0, 1], description: 你方的启停 }
+                              blocked: { type: integer, enum: [0, 1], description: 1 为平台停用，你方打不开；两个都开着才接待 }
                               settings: { $ref: '#/components/schemas/ServiceSettings' }
                               agents: { type: integer, description: 坐席数 }
                               agents_online: { type: integer, description: 在线且能接待的坐席数 }
@@ -2749,7 +2988,7 @@ paths:
       operationId: csDeleteAgent
       summary: 移除坐席
       description: |
-        令牌失效、断开连接，接待中的转回排队重新分配。历史接待里仍显示这名坐席。
+        令牌失效、断开连接，接待中的转回排队重新分配。历史接待里仍显示这名坐席。本来就不在的也算成功。
       security: [{ ApiKey: [] }]
       parameters:
         - $ref: '#/components/parameters/ServiceIdPath'
@@ -2982,12 +3221,14 @@ components:
   schemas:
     ServiceSettings:
       type: object
-      description: 主体自己的设置；没给的项用站点设置。
+      description: 主体自己的设置；没给的项用站点设置，文案给空串是不发。
       properties:
         welcome_text: { type: string, maxLength: 200 }
         queue_text: { type: string, maxLength: 200 }
         offline_text: { type: string, maxLength: 200 }
-        timeout_minutes: { type: integer, minimum: 1, maximum: 1440, description: 双方都没说话多久后自动结束 }
+        timeout_text: { type: string, maxLength: 200, description: 超时自动结束时的提示 }
+        transfer_text: { type: string, maxLength: 200, description: 转接、同事接管时的提示 }
+        timeout_minutes: { type: integer, minimum: 1, maximum: 1440, description: 坐席最后一条之后多久没动静自动结束；用户说了没人回的不会超时 }
         rating_enabled: { type: boolean, description: 结束后是否邀请评价 }
         visitor_enabled: { type: boolean, description: 是否允许没登录的网页访客咨询，默认不允许 }
     ServiceInput:
@@ -3059,7 +3300,7 @@ components:
         - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）、消息不存在（撤回）
         - `IM_KEY_INVALID`：401
         - `IM_TOKEN_INVALID`：401
-        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`：200
+        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`、`CS_SERVICE_NOT_FOUND`、`CS_SERVICE_DISABLED`、`CS_AGENT_NOT_FOUND`：200
         - `FORBIDDEN`：403 不是会话成员
         - `LICENSE_INVALID`、`LICENSE_EXPIRED`、`LICENSE_DOMAIN`：403 站点授权异常
         - `INTERNAL`：500
@@ -3073,6 +3314,9 @@ components:
         - IM_RATE_LIMITED
         - IM_BLOCKED
         - IM_RECALL_NOT_ALLOWED
+        - CS_SERVICE_NOT_FOUND
+        - CS_SERVICE_DISABLED
+        - CS_AGENT_NOT_FOUND
         - FORBIDDEN
         - INTERNAL
         - LICENSE_INVALID

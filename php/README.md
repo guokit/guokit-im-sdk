@@ -60,16 +60,18 @@ try {
 | `setServiceStatus($serviceId, int $status)` / `serviceSummary($serviceId)` | 启停主体 / 资料、坐席数与排队数 |
 | `upsertServiceAgent($serviceId, $externalId, $nickname, ?int $maxConcurrent = null)` / `removeServiceAgent($serviceId, $externalId)` | 建或改 / 移除主体的坐席（你方员工） |
 | `issueAgentToken($serviceId, $externalId)` | 签坐席令牌，交给嵌入的工作台页面，返回 `token` 与 `expires_at`。**签之前请自己确认该员工有权限** |
+| `services($cursor = '', $limit = 50)` / `serviceAgents($serviceId)` / `serviceSessions($serviceId)` | 对账：主体列表（`items` 与 `next_cursor`）/ 在职坐席 / 未结束的接待。需服务端 ≥ v1.21.0 |
+| `replaceServiceAgents($serviceId, array $agents)` | 坐席整份替换，返回 `added` / `updated` / `removed`。需服务端 ≥ v1.21.0 |
 | `importServices(array $services)` | 批量导入主体与坐席，最多 100 个主体、合计 500 个坐席 |
 | `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |
 
-`user_id`、`target` 进路径前已自动 `rawurlencode`。`ImException` 的 `getErrorCode()` 在非业务错误时取值：`NETWORK`（网络异常）、`INTERNAL`（响应不是合法 JSON）、`CALLBACK_INVALID`（回调验签失败）。
+`user_id`、`target` 进路径前已自动 `rawurlencode`。`ImException` 的 `getErrorCode()` 在非业务错误时取值：`NETWORK`（网络异常）、`INTERNAL`（响应不是合法 JSON）、`CALLBACK_INVALID`（回调验签失败）。客服主体的接口另有 `CS_SERVICE_NOT_FOUND`、`CS_AGENT_NOT_FOUND`、`CS_SERVICE_DISABLED`（服务端 ≥ v1.21.0，之前是 `VALIDATION`）。
 
 ## 回调验签
 
 必须用**原始请求体**验签，不要先 `json_decode` 再编码。时间戳须为数字且与当前相差不超过 300 秒（第 5 个参数可改）。
 
-`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
+`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` / `cs_session`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
 
 响应体用 `Callback::allow()`、`Callback::reject('原因')`、`Callback::ack()` 生成（均返回 JSON 字符串）。
 

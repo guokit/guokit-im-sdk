@@ -468,7 +468,7 @@ paths:
       operationId: serverRecallMessage
       summary: 撤回消息
       description: |
-        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、客服发的消息一律按不存在（404）。
+        不限时、不看「IM 设置」的撤回开关，用于处理违规内容。渠道用户（网页访客、微信）参与的会话、平台客服发的消息一律按不存在（404）；其他客服主体的坐席发的可以撤（`content.by` 为 `server`）。
         已撤回的再调返回同一结果，不再推送、不再回调。
       security: [{ ApiKey: [] }]
       responses:
@@ -1369,7 +1369,7 @@ paths:
       operationId: csPatchService
       summary: 启用或停用主体
       description: |
-        停用后用户发不进来，未结束的接待静默结束，坐席令牌失效并断开。
+        停用后用户发不进来，未结束的接待静默结束，坐席断开。平台停用的（`blocked` 为 1）你方启用了也不接待。
       security: [{ ApiKey: [] }]
       parameters:
         - $ref: '#/components/parameters/ServiceIdPath'
@@ -1401,13 +1401,190 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/imcs/v1/server/services:
+    get:
+      tags: [客服主体]
+      operationId: csListServices
+      summary: 主体列表
+      description: 对账用，按建立先后翻页。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - { name: cursor, in: query, required: false, description: 上一页的 next_cursor, schema: { type: string } }
+        - { name: limit, in: query, required: false, description: 默认 50，最大 100, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items, next_cursor]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    service_id: { type: string }
+                                    name: { type: string }
+                                    status: { type: integer, enum: [0, 1] }
+                                    blocked: { type: integer, enum: [0, 1], description: 1 为平台停用 }
+                                    updated_at: { $ref: '#/components/schemas/DateTime' }
+                              next_cursor: { type: string, description: 空串是没有了 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/agents:
+    get:
+      tags: [客服主体]
+      operationId: csListAgents
+      summary: 坐席列表
+      description: 在职的全部坐席。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    external_id: { type: string }
+                                    nickname: { type: string }
+                                    agent_id: { type: integer, format: int64 }
+                                    max_concurrent: { type: integer }
+                                    status: { type: string, enum: [online, away, offline], description: 他自己设的 }
+                                    connected: { type: boolean, description: 工作台此刻连着没有 }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    put:
+      tags: [客服主体]
+      operationId: csReplaceAgents
+      summary: 坐席整份替换
+      description: |
+        多的移除，少的补上，没变的不动；空数组是全部移除。最多 500 个，`external_id` 不区分大小写、不能重复。
+        先全部校验再逐个做，中途出错可整份重试。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agents]
+              properties:
+                agents:
+                  type: array
+                  maxItems: 500
+                  items:
+                    allOf:
+                      - $ref: '#/components/schemas/ServiceAgentInput'
+                      - type: object
+                        required: [external_id]
+                        properties:
+                          external_id: { type: string, pattern: '^[A-Za-z0-9_.@-]{1,64}$' }
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [added, updated, removed]
+                            properties:
+                              added: { type: integer }
+                              updated: { type: integer }
+                              removed: { type: integer }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/imcs/v1/server/services/{sid}/sessions:
+    get:
+      tags: [客服主体]
+      operationId: csListOpenSessions
+      summary: 未结束的接待
+      description: 排队中与接待中的，最近有消息的在前，最多 200 条。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdPath'
+      responses:
+        '200':
+          description: 成功；调用超频时为 `IM_RATE_LIMITED`，主体不存在为 `CS_SERVICE_NOT_FOUND`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items]
+                            properties:
+                              items:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    session_id: { type: integer, format: int64 }
+                                    user_id: { type: string }
+                                    status: { type: string, enum: [queued, active] }
+                                    agent_external_id: { type: string, description: 接待的员工；排队中为空串 }
+                                    agent_online: { type: boolean, description: 该员工的工作台此刻连着没有 }
+                                    unread: { type: integer, description: 用户说了还没人看的条数 }
+                                    queued_at: { $ref: '#/components/schemas/DateTime' }
+                                    last_msg_at: { $ref: '#/components/schemas/DateTime' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/imcs/v1/server/services/{sid}/summary:
     get:
       tags: [客服主体]
       operationId: csServiceSummary
       summary: 主体资料与此刻的接待情况
       description: |
-        主体不存在回 400 `VALIDATION`。
+        主体不存在回 `CS_SERVICE_NOT_FOUND`。
       security: [{ ApiKey: [] }]
       parameters:
         - $ref: '#/components/parameters/ServiceIdPath'
@@ -1424,13 +1601,14 @@ paths:
                         properties:
                           data:
                             type: object
-                            required: [service_id, user_id, name, avatar_url, status, settings, agents, agents_online, queue_count]
+                            required: [service_id, user_id, name, avatar_url, status, blocked, settings, agents, agents_online, queue_count]
                             properties:
                               service_id: { type: string }
                               user_id: { type: string }
                               name: { type: string }
                               avatar_url: { type: string }
-                              status: { type: integer, enum: [0, 1] }
+                              status: { type: integer, enum: [0, 1], description: 你方的启停 }
+                              blocked: { type: integer, enum: [0, 1], description: 1 为平台停用，你方打不开；两个都开着才接待 }
                               settings: { $ref: '#/components/schemas/ServiceSettings' }
                               agents: { type: integer, description: 坐席数 }
                               agents_online: { type: integer, description: 在线且能接待的坐席数 }
@@ -1485,7 +1663,7 @@ paths:
       operationId: csDeleteAgent
       summary: 移除坐席
       description: |
-        令牌失效、断开连接，接待中的转回排队重新分配。历史接待里仍显示这名坐席。
+        令牌失效、断开连接，接待中的转回排队重新分配。历史接待里仍显示这名坐席。本来就不在的也算成功。
       security: [{ ApiKey: [] }]
       parameters:
         - $ref: '#/components/parameters/ServiceIdPath'
@@ -1718,12 +1896,14 @@ components:
   schemas:
     ServiceSettings:
       type: object
-      description: 主体自己的设置；没给的项用站点设置。
+      description: 主体自己的设置；没给的项用站点设置，文案给空串是不发。
       properties:
         welcome_text: { type: string, maxLength: 200 }
         queue_text: { type: string, maxLength: 200 }
         offline_text: { type: string, maxLength: 200 }
-        timeout_minutes: { type: integer, minimum: 1, maximum: 1440, description: 双方都没说话多久后自动结束 }
+        timeout_text: { type: string, maxLength: 200, description: 超时自动结束时的提示 }
+        transfer_text: { type: string, maxLength: 200, description: 转接、同事接管时的提示 }
+        timeout_minutes: { type: integer, minimum: 1, maximum: 1440, description: 坐席最后一条之后多久没动静自动结束；用户说了没人回的不会超时 }
         rating_enabled: { type: boolean, description: 结束后是否邀请评价 }
         visitor_enabled: { type: boolean, description: 是否允许没登录的网页访客咨询，默认不允许 }
     ServiceInput:
@@ -1795,7 +1975,7 @@ components:
         - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）、消息不存在（撤回）
         - `IM_KEY_INVALID`：401
         - `IM_TOKEN_INVALID`：401
-        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`：200
+        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`、`CS_SERVICE_NOT_FOUND`、`CS_SERVICE_DISABLED`、`CS_AGENT_NOT_FOUND`：200
         - `FORBIDDEN`：403 不是会话成员
         - `LICENSE_INVALID`、`LICENSE_EXPIRED`、`LICENSE_DOMAIN`：403 站点授权异常
         - `INTERNAL`：500
@@ -1809,6 +1989,9 @@ components:
         - IM_RATE_LIMITED
         - IM_BLOCKED
         - IM_RECALL_NOT_ALLOWED
+        - CS_SERVICE_NOT_FOUND
+        - CS_SERVICE_DISABLED
+        - CS_AGENT_NOT_FOUND
         - FORBIDDEN
         - INTERNAL
         - LICENSE_INVALID

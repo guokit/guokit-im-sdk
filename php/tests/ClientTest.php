@@ -89,6 +89,7 @@ class ClientTest extends TestCase
             [fn(Client $im) => $im->upsertService('shop_1', '甲店', '', []), 'PUT', '/services/shop_1', ['name' => '甲店', 'avatar_url' => '', 'settings' => []]],
             [fn(Client $im) => $im->setServiceStatus('shop_1', 0), 'PATCH', '/services/shop_1', ['status' => 0]],
             [fn(Client $im) => $im->serviceSummary('shop_1'), 'GET', '/services/shop_1/summary', null],
+            [fn(Client $im) => $im->replaceServiceAgents('shop_1', [3 => ['external_id' => 'e1', 'nickname' => '王']]), 'PUT', '/services/shop_1/agents', ['agents' => [['external_id' => 'e1', 'nickname' => '王']]]],
             [fn(Client $im) => $im->importServices([['service_id' => 'a', 'name' => 'A']]), 'POST', '/services/batch', ['services' => [['service_id' => 'a', 'name' => 'A']]]],
             [fn(Client $im) => $im->upsertServiceAgent('shop_1', 'e@x', '小王', 3), 'PUT', '/services/shop_1/agents/e%40x', ['nickname' => '小王', 'max_concurrent' => 3]],
             [fn(Client $im) => $im->removeServiceAgent('shop_1', 'e1'), 'DELETE', '/services/shop_1/agents/e1', null],
@@ -102,6 +103,14 @@ class ClientTest extends TestCase
             $this->assertSame('/api/imcs/v1/server' . $path, $req->getUri()->getPath());
             $this->assertSame($body, json_decode((string) $req->getBody(), true));
         }
+        foreach (['serviceAgents' => '/agents', 'serviceSessions' => '/sessions'] as $fn => $suffix) {
+            $im = $this->client(new Response(200, [], json_encode(['code' => 0, 'message' => 'ok', 'data' => ['items' => [['external_id' => 'e1']]]])));
+            $this->assertSame([['external_id' => 'e1']], $im->$fn('shop_1'));
+            $this->assertSame('/api/imcs/v1/server/services/shop_1' . $suffix, $this->history[0]['request']->getUri()->getPath());
+        }
+        $im = $this->client(new Response(200, [], json_encode(['code' => 0, 'message' => 'ok', 'data' => ['items' => [], 'next_cursor' => '']])));
+        $this->assertSame('', $im->services('7', 10)['next_cursor']);
+        $this->assertSame('cursor=7&limit=10', $this->history[0]['request']->getUri()->getQuery());
         // 空设置要发成 {}，发成 [] 会被服务端拒绝
         $im = $this->client(new Response(200, [], $ok));
         $im->upsertService('shop_1', '甲店', '', []);
