@@ -5,8 +5,9 @@ import type {
   ImBlockItem, ImConnectionState, ImConversation, ImCsState, ImFeatures, ImMessage, ImSendProgress, ImToken, ImTyping,
 } from './models.js'
 import { browserPlatform, isBrowser } from './platform/browser.js'
-import type { ImPlatform, NetworkChange } from './platform/types.js'
+import type { ImFile, ImPlatform, NetworkChange } from './platform/types.js'
 import { CODE_KICKED, CODE_TOKEN_INVALID, createRealtime, webSocketUrl, type Realtime, type RealtimeFactory } from './realtime.js'
+import { Sender } from './sender.js'
 import { Store } from './store.js'
 import { Sync } from './sync.js'
 import { TokenManager } from './token.js'
@@ -48,6 +49,7 @@ interface Session {
   tokens: TokenManager
   api: ImApi
   sync: Sync
+  sender: Sender
   rt: Realtime | null
   rtToken: string | null
   kicked: boolean
@@ -171,8 +173,15 @@ export class GuokitIm {
       onError: e => isKickedOut(e) && this.kick(s),
       onTyping: (id, from, ttl) => this.showTyping(s, id, from, ttl),
     })
+    const sender = new Sender(api, store, sync, this.platform, me, {
+      onUpdated: m => this.emit(s, 'messageUpdated', m),
+      onSnapshot: () => this.snapshot(s),
+      onKickedOut: () => this.kick(s),
+      onProgress: p => this.emit(s, 'sendProgress', p),
+      closed: () => this.s !== s,
+    })
     const s: Session = {
-      me, store, tokens, api, sync, rt: null, rtToken: null, kicked: false, authRetries: 0,
+      me, store, tokens, api, sync, sender, rt: null, rtToken: null, kicked: false, authRetries: 0,
       reportedRead: new Map(), typingTimers: new Map(), typingSent: new Map(), hiddenAt: null, offs: [],
     }
     this.s = s
@@ -369,6 +378,77 @@ export class GuokitIm {
     if (phone && !/^[0-9+\- ]{5,30}$/.test(phone)) throw new RangeError('电话须为 5–30 位数字、+、-、空格')
     if (utf8Length(email) > 120) throw new RangeError('邮箱不能超过 120 字节')
     return this.run(s, () => s.api.csLeave(name, phone, email))
+  }
+
+  // ---------------- 发送 ----------------
+  //
+  // 都返回 Promise<ImMessage>，在终态（sent / failed / rejected）完成，发送失败不抛，看 status 与 errorCode：
+  // 服务端错误码，或 NETWORK / BAD_RESPONSE / IMAGE_DECODE / *_MISSING / KICKED_OUT / UNKNOWN。
+  // 未登录、参数用错同步抛。
+
+  sendText(to: string, text: string): Promise<ImMessage> {
+    return this.session().sender.text(to, text)
+  }
+
+  /** 宽高不传时由 SDK 取。只收 JPEG / PNG / GIF / WebP。 */
+  sendImage(to: string, file: ImFile, opts: { width?: number; height?: number } = {}): Promise<ImMessage> {
+    return this.session().sender.image(to, file, opts)
+  }
+
+  /** m4a（AAC）或 mp3，60 秒、2MB 以内；小程序录音用 mp3。录音由接入方做。 */
+  sendVoice(to: string, file: ImFile, opts: { durationMs: number }): Promise<ImMessage> {
+    return this.session().sender.voice(to, file, opts.durationMs)
+  }
+
+  /** 大小上限先看 features().fileMaxMb，0 = 不能发。文件名的扩展名要和内容对得上（接入文档 §5.6）。 */
+  sendFile(to: string, file: ImFile, opts: { name?: string } = {}): Promise<ImMessage> {
+    return this.session().sender.file(to, file, opts.name)
+  }
+
+  /** 只收 mp4 / mov，发送前请转成 H.264 的 MP4。大小上限看 features().videoMaxMb。封面由接入方截。 */
+  sendVideo(to: string, file: ImFile, opts: { durationMs: number; width: number; height: number; cover?: ImFile }): Promise<ImMessage> {
+    return this.session().sender.video(to, file, opts)
+  }
+
+  sendLocation(to: string, lat: number, lng: number, opts: { name?: string; address?: string } = {}): Promise<ImMessage> {
+    return this.session().sender.location(to, lat, lng, opts)
+  }
+
+  /** data 须为对象（业务卡片放 data.im_card），desc 用于会话预览与离线推送。 */
+  sendCustom(to: string, data: Record<string, unknown>, desc: string): Promise<ImMessage> {
+    return this.session().sender.custom(to, data, desc)
+  }
+
+  /** 重发本人的 failed 消息，沿用原 clientMsgId。 */
+  resend(failed: ImMessage): Promise<ImMessage> {
+    return this.session().sender.resend(failed)
+  }
+
+  /** 图片可用地址，过期会自动续；类型不对为 null。语音、文件、视频同理。 */
+  imageUrl(m: ImMessage): Promise<string | null> {
+    return this.mediaUrl(m, 'image')
+  }
+
+  voiceUrl(m: ImMessage): Promise<string | null> {
+    return this.mediaUrl(m, 'voice')
+  }
+
+  /** 文件下载地址（强制下载、带原文件名）。 */
+  fileUrl(m: ImMessage): Promise<string | null> {
+    return this.mediaUrl(m, 'file')
+  }
+
+  videoUrl(m: ImMessage): Promise<string | null> {
+    return this.mediaUrl(m, 'video')
+  }
+
+  videoCoverUrl(m: ImMessage): Promise<string | null> {
+    return this.mediaUrl(m, 'video', 'cover_url')
+  }
+
+  private async mediaUrl(m: ImMessage, type: string, key?: 'url' | 'cover_url'): Promise<string | null> {
+    const url = await this.session().sender.mediaUrl(m, type, key)
+    return url && url[0] === '/' ? this.base + url : url
   }
 
   // ---------------- 内部 ----------------
