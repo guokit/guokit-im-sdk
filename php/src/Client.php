@@ -200,9 +200,9 @@ class Client
     }
 
     /** 建或改一名坐席（你方员工）；移除过的重新启用。 */
-    public function upsertServiceAgent(string $serviceId, string $externalId, string $nickname, string $avatarUrl = '', ?int $maxConcurrent = null): array
+    public function upsertServiceAgent(string $serviceId, string $externalId, string $nickname, ?int $maxConcurrent = null): array
     {
-        $body = ['nickname' => $nickname, 'avatar_url' => $avatarUrl];
+        $body = ['nickname' => $nickname];
         if ($maxConcurrent !== null) {
             $body['max_concurrent'] = $maxConcurrent;
         }

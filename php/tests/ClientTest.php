@@ -90,7 +90,7 @@ class ClientTest extends TestCase
             [fn(Client $im) => $im->setServiceStatus('shop_1', 0), 'PATCH', '/services/shop_1', ['status' => 0]],
             [fn(Client $im) => $im->serviceSummary('shop_1'), 'GET', '/services/shop_1/summary', null],
             [fn(Client $im) => $im->importServices([['service_id' => 'a', 'name' => 'A']]), 'POST', '/services/batch', ['services' => [['service_id' => 'a', 'name' => 'A']]]],
-            [fn(Client $im) => $im->upsertServiceAgent('shop_1', 'e@x', '小王', '', 3), 'PUT', '/services/shop_1/agents/e%40x', ['nickname' => '小王', 'avatar_url' => '', 'max_concurrent' => 3]],
+            [fn(Client $im) => $im->upsertServiceAgent('shop_1', 'e@x', '小王', 3), 'PUT', '/services/shop_1/agents/e%40x', ['nickname' => '小王', 'max_concurrent' => 3]],
             [fn(Client $im) => $im->removeServiceAgent('shop_1', 'e1'), 'DELETE', '/services/shop_1/agents/e1', null],
             [fn(Client $im) => $im->issueAgentToken('shop_1', 'e1'), 'POST', '/services/shop_1/agents/e1/token', null],
         ];

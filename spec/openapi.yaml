@@ -1474,7 +1474,7 @@ paths:
                             properties:
                               service_id: { type: string }
                               external_id: { type: string }
-                              agent_id: { type: integer, format: int64, description: 坐席 ID，与消息里的 agent_id 同一个 }
+                              agent_id: { type: integer, format: int64, description: 坐席 ID，移除后重新加回来不变 }
                   - $ref: '#/components/schemas/ErrorEnvelope'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/KeyInvalid' }
@@ -1738,7 +1738,6 @@ components:
       required: [nickname]
       properties:
         nickname: { type: string, minLength: 1, maxLength: 32 }
-        avatar_url: { type: string, maxLength: 512 }
         max_concurrent: { type: integer, minimum: 1, maximum: 50, description: 同时接待上限；新建缺省 5，已有的没传不改 }
     ServiceBatch:
       type: object

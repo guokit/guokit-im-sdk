@@ -58,7 +58,7 @@ try {
 | `history($conversationId, $afterSeq = null, $beforeSeq = null, $limit = 30)` | 查会话历史（审计） |
 | `upsertService($serviceId, $name, $avatarUrl = '', ?array $settings = null)` | 建或改客服主体（每家门店一个客服这类场景），返回 `service_id` 与 `user_id`（`@cs:<主体标识>`）。需服务端 ≥ v1.20.0，下同 |
 | `setServiceStatus($serviceId, int $status)` / `serviceSummary($serviceId)` | 启停主体 / 资料、坐席数与排队数 |
-| `upsertServiceAgent($serviceId, $externalId, $nickname, $avatarUrl = '', ?int $maxConcurrent = null)` / `removeServiceAgent($serviceId, $externalId)` | 建或改 / 移除主体的坐席（你方员工） |
+| `upsertServiceAgent($serviceId, $externalId, $nickname, ?int $maxConcurrent = null)` / `removeServiceAgent($serviceId, $externalId)` | 建或改 / 移除主体的坐席（你方员工） |
 | `issueAgentToken($serviceId, $externalId)` | 签坐席令牌，交给嵌入的工作台页面，返回 `token` 与 `expires_at`。**签之前请自己确认该员工有权限** |
 | `importServices(array $services)` | 批量导入主体与坐席，最多 100 个主体、合计 500 个坐席 |
 | `onlineStatus(array $userIds)` | 批量查询在线状态（1–100 个），返回 `[user_id => bool]` |

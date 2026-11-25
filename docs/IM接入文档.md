@@ -1191,7 +1191,7 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 |---|---|---|---|
 | PUT | `/services/{sid}` | `{"name", "avatar_url"?, "settings"?}` | 建或改。没传 `settings` 不改设置，传了整个替换；不改启停 |
 | PATCH | `/services/{sid}` | `{"status": 0\|1}` | 停用：用户发不进来，未结束的接待结束，坐席令牌失效并断开 |
-| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "avatar_url"?, "max_concurrent"?}` | 建或改坐席；移除过的重新启用 |
+| PUT | `/services/{sid}/agents/{external_id}` | `{"nickname", "max_concurrent"?}` | 建或改坐席；移除过的重新启用 |
 | DELETE | `/services/{sid}/agents/{external_id}` | 无 | 移除：令牌失效、断开，接待中的转回排队。历史接待里仍显示这名坐席 |
 | POST | `/services/{sid}/agents/{external_id}/token` | 无 | 签坐席令牌，返回 `{"token", "expires_at"}` |
 | GET | `/services/{sid}/summary` | — | 资料、设置、坐席数 `agents`、在线坐席 `agents_online`、排队 `queue_count` |
