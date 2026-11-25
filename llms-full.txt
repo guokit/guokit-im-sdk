@@ -1623,7 +1623,7 @@ paths:
       security: [{ ApiKey: [] }]
       responses:
         '200':
-          description: 成功返回撤回后的消息对象（`type` 为 `recalled`）；业务失败为 `IM_RECALL_NOT_ALLOWED`、`IM_RATE_LIMITED`。
+          description: 成功返回撤回后的消息对象（`type` 为 `recalled`）；业务失败为 `IM_RATE_LIMITED`（接入应用超频）。
           content:
             application/json:
               schema:

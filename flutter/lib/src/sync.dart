@@ -322,11 +322,17 @@ class ImSync {
           ImMessage.fromServer(j, me: me, peerId: conv?.peer.userId),
     ];
     final prev = <int, ImMessageStatus>{};
-    final wasRecalled = <int>{};
+    final unchanged = <int>{};
     for (var i = 0; i < msgs.length; i++) {
       if (msgs[i].isRecalled && msgs[i].id != null) {
-        final p = await store.getMessageById(msgs[i].id!);
-        if (p != null && p.isRecalled) wasRecalled.add(i);
+        final p =
+            await store.getMessageById(msgs[i].id!) ??
+            await store.getMessageByClientMsgId(
+              msgs[i].from,
+              msgs[i].clientMsgId,
+            );
+        // 本地没有（含已被清空、入不了库的）也不算变化，否则清空后的聊天页会冒出一条「已撤回」。
+        if (p == null || p.isRecalled) unchanged.add(i);
       }
       if (!msgs[i].isSelf) continue;
       final p = await store.getMessageByClientMsgId(me, msgs[i].clientMsgId);
@@ -337,7 +343,7 @@ class ImSync {
       final r = results[i];
       if (msgs[i].isRecalled) {
         // 增量与推送会重复给，只在真的变成撤回时发。
-        final changed = r.inserted ? notify : !wasRecalled.contains(i);
+        final changed = r.inserted ? notify : !unchanged.contains(i);
         if (changed && r.message.isRecalled) onMessageUpdated(r.message);
       } else if (r.inserted) {
         if (notify) onNewMessage(r.message);

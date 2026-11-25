@@ -347,6 +347,21 @@ void main() {
     expect(news, isEmpty);
     expect((await store.getConversation(1))!.lastMessage!.preview, '[消息已撤回]');
     expect(await store.getConversation(77), null); // 本地没有的会话不因撤回建出来
+
+    // 已被本人清空的消息之后被撤回：不入库、不发事件
+    await im.clearConversation(1);
+    await settle();
+    updated.clear();
+    rt.emit(
+      ImRealtimePublication({
+        'event': 'message_recalled',
+        'conversation_id': 1,
+        'seq': 4,
+        'message': _recalled(1, 4),
+      }),
+    );
+    await settle();
+    expect(updated, isEmpty);
   });
 
   test('recall 走同步队列替换本地；别人的或未发出的抛 ArgumentError', () async {
