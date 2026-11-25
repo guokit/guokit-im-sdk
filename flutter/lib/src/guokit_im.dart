@@ -107,8 +107,14 @@ class GuokitIm {
   Future<void>? _loggingIn;
   String? _loggingUser;
 
-  /// 登出的收尾（断连接、关库）还没完成。
-  Future<void>? _loggingOut;
+  /// 每次登录、登出自增，用来认出「我已被更新的一次取代」。
+  int _gen = 0;
+
+  /// 开库、关库的串行队列，见 [_serial]。
+  Future<void> _storeOps = Future<void>.value();
+
+  /// 正在登出（或登出收尾失败）的用户。
+  String? _closing;
 
   static const int _maxAuthRetries = 2;
 
@@ -171,22 +177,28 @@ class GuokitIm {
 
   Future<void> _login(String userId) async {
     final cur = _s;
-    if (cur != null && (cur.me != userId || cur.kicked)) unawaited(_logout());
-    await _loggingOut;
-    final s = _s;
-    if (s != null && s.me == userId) {
+    if (cur != null && cur.me == userId && !cur.kicked) {
       if (_state == ImConnectionState.disconnected) {
-        s.authRetries = 0; // App 主动重连，3500 重试次数重新算
-        await _connect(s);
+        cur.authRetries = 0; // App 主动重连，3500 重试次数重新算
+        await _connect(cur);
       }
       return;
     }
-    await _store.open(userId); // 打开失败直接抛，状态保持未登录
-    if (_store.userId != userId) return; // 打开期间又登录了别的用户
-    final session = _newSession(userId);
-    _s = session;
-    await _emitSnapshot(session, forceTotal: true);
-    await _connect(session);
+    final gen = ++_gen;
+    if (cur != null) await _close(cur, clearCache: false);
+    // 打开失败直接抛，状态保持未登录。开库前后各核一次：被更新的登录 / 登出取代的不再继续。
+    final s = await _serial(() async {
+      if (gen != _gen) return null;
+      await _store.open(userId);
+      if (gen != _gen) {
+        await _store.close();
+        return null;
+      }
+      return _s = _newSession(userId);
+    });
+    if (s == null) return;
+    await _emitSnapshot(s, forceTotal: true);
+    await _connect(s);
   }
 
   _Session _newSession(String me) {
@@ -231,16 +243,26 @@ class GuokitIm {
 
   /// 断开、清令牌、关闭本地库。[clearCache] 为 true 时删除该用户本地库。
   /// 还没返回的调用抛 [StateError]，还在发的消息以 failed / `UNKNOWN` 完成、不发事件。
+  ///
+  /// 还没完成的 [login] 一并取消，那次调用正常返回但不会登录上。
   Future<void> logout({bool clearCache = false}) {
-    if (_s != null) _loggingIn = null; // 已过打开库那一步，之后的 login 不能再等它
-    return _logout(clearCache: clearCache);
+    _gen++;
+    _loggingIn = null;
+    final s = _s;
+    if (s != null) return _close(s, clearCache: clearCache);
+    // 上一次登出还在收尾（或收尾失败）：等它，要清缓存的接着清。
+    final left = _closing;
+    if (!clearCache || left == null) return _serial(() async {});
+    return _serial(() async {
+      await _store.deleteAll(left);
+      if (_closing == left) _closing = null;
+    });
   }
 
-  Future<void> _logout({bool clearCache = false}) {
-    final s = _s;
-    if (s == null) return _loggingOut ?? Future<void>.value();
-    // 先整套作废，再做会让出的收尾；收尾没完 login 会等着，否则会把新账号刚打开的库关掉。
+  /// 先整套作废（同步），再排队断连接、关库。
+  Future<void> _close(_Session s, {required bool clearCache}) {
     _s = null;
+    _closing = s.me;
     s.sync.close();
     s.api.invalidate();
     s.store.invalidate();
@@ -248,25 +270,30 @@ class GuokitIm {
     for (final t in s.typingTimers.values) {
       t.cancel();
     }
-    late final Future<void> f;
-    f = _finishLogout(s, clearCache).whenComplete(() {
-      if (identical(_loggingOut, f)) _loggingOut = null;
+    return _serial(() async {
+      try {
+        await _closeRealtime(s);
+        if (clearCache) {
+          await _store.deleteAll(s.me);
+        } else {
+          await _store.close();
+        }
+        if (_closing == s.me) _closing = null;
+      } finally {
+        if (_totalUnread != 0) {
+          _totalUnread = 0;
+          _totalUnreadCtrl.add(0);
+        }
+        _setState(ImConnectionState.disconnected);
+      }
     });
-    return _loggingOut = f;
   }
 
-  Future<void> _finishLogout(_Session s, bool clearCache) async {
-    await _closeRealtime(s);
-    if (clearCache) {
-      await _store.deleteAll(s.me);
-    } else {
-      await _store.close();
-    }
-    if (_totalUnread != 0) {
-      _totalUnread = 0;
-      _totalUnreadCtrl.add(0);
-    }
-    _setState(ImConnectionState.disconnected);
+  /// 开库、关库、删库一个接一个：并发会把别的账号刚打开的库关掉或换掉。
+  Future<T> _serial<T>(Future<T> Function() f) {
+    final r = _storeOps.then((_) => f());
+    _storeOps = r.then((_) {}, onError: (Object _) {});
+    return r;
   }
 
   static Future<void> _closeRealtime(_Session s) async {
@@ -761,6 +788,7 @@ class GuokitIm {
   }
 
   Future<void> _connect(_Session s) async {
+    if (!_live(s)) return;
     _setState(ImConnectionState.connecting);
     final String token;
     try {

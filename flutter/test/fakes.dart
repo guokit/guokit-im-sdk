@@ -28,6 +28,11 @@ class FakeRealtime implements ImRealtime {
 
   @override
   Future<void> disconnect() async {}
+  bool closed = false;
+  Duration closeDelay = Duration.zero;
   @override
-  Future<void> close() async {}
+  Future<void> close() async {
+    closed = true;
+    if (closeDelay > Duration.zero) await Future<void>.delayed(closeDelay);
+  }
 }

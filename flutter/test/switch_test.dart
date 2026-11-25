@@ -190,6 +190,88 @@ void main() {
     expect(im.connectionState, ImConnectionState.connected);
   });
 
+  for (final delay in [0, 20, 60]) {
+    test('两次不同用户的登录重叠（晚 $delay ms）：最终是后一个，库、令牌、连接都是它的', () async {
+      final dir = Directory.systemTemp.createTempSync('guokit_im_switch');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      SqliteImStore sqlite() => SqliteImStore(
+        factory: databaseFactoryFfi,
+        directory: () async => dir.path,
+      );
+      final old = sqlite(); // B 在本机登录过，开库比新建的 A 快
+      await old.open('B');
+      await old.close();
+      create(sqlite());
+      handler = (r) async => r.url.path.endsWith('/conversations')
+          ? _res({
+              'items': [_conv(1, 'friend-of-${r.headers['Authorization']}')],
+              'next_cursor': '',
+            })
+          : base(r);
+      user = 'X';
+      await im.login('X');
+      await pumpEventQueue();
+      rts.first.closeDelay = const Duration(milliseconds: 40);
+      user = 'A';
+      final a = im.login('A');
+      await Future<void>.delayed(Duration(milliseconds: delay));
+      user = 'B';
+      await Future.wait([a, im.login('B')]);
+      await pumpEventQueue();
+      await im.idle;
+      expect((im.currentUserId, store.userId), ('B', 'B'));
+      expect(im.connectionState, ImConnectionState.connected);
+      expect((await im.conversations()).map((c) => c.peer.userId), [
+        'friend-of-Bearer tok-B',
+      ]);
+      expect(rts.where((r) => !r.closed), [rts.last]);
+      await im.logout();
+      final check = sqlite();
+      await check.open('A');
+      expect(
+        (await check.listConversations()).map((c) => c.peer.userId),
+        isNot(contains('friend-of-Bearer tok-B')),
+      );
+      await check.close();
+    });
+  }
+
+  test('登录还没完成就登出：不会登录上，状态停在断开', () async {
+    final l = im.login('A');
+    await im.logout();
+    await l;
+    await pumpEventQueue();
+    expect((im.currentUserId, store.userId), (null, null));
+    expect(im.connectionState, ImConnectionState.disconnected);
+  });
+
+  test('登出没完又要清缓存：照样清', () async {
+    handler = (r) async => r.url.path.endsWith('/conversations')
+        ? _res({
+            'items': [_conv(1, 'p')],
+            'next_cursor': '',
+          })
+        : base(r);
+    await im.login('A');
+    await pumpEventQueue();
+    unawaited(im.logout());
+    await im.logout(clearCache: true);
+    await store.open('A');
+    expect(await store.listConversations(), isEmpty);
+  });
+
+  test('A 的失败消息不能在 B 里重发', () async {
+    handler = (r) async => r.url.path.endsWith('/messages')
+        ? throw http.ClientException('断网')
+        : base(r);
+    await im.login('A');
+    await pumpEventQueue();
+    final m = await im.sendText('peer', 'A 写的');
+    expect(m.status, ImMessageStatus.failed);
+    await switchToB();
+    await expectLater(im.resend(m), throwsArgumentError);
+  });
+
   test('同一用户并发登录只建一条连接；没登录时拉黑抛 StateError', () async {
     await expectLater(im.block('u2'), throwsStateError);
     await Future.wait([im.login('A'), im.login('A')]);

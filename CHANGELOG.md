@@ -7,7 +7,7 @@
 修 Flutter SDK 换号串账号，**支持切换账号的 App 请尽快升级**。
 
 - **Flutter**：同一个 `GuokitIm` 实例里 A 登出、B 登录，而 A 还有请求没返回时，A 的会话与消息会写进 B 的本地库，A 的消息可能以 B 的身份发出，A 迟到的被踢会把 B 踢下线。改为每次登录一整套、登出整套作废
-- **Flutter** 行为变化：登出时还没返回的调用抛 `StateError`；登出时还在发的消息以 failed / `UNKNOWN` 完成、不发事件；`block` / `unblock` / `blocks` 要先登录（与其他方法一致）；没等 `logout()` 完成就 `login()` 的，会等它收尾完再登录
+- **Flutter** 行为变化：登出时还没返回的调用抛 `StateError`；登出时还在发的消息以 failed / `UNKNOWN` 完成、不发事件；`block` / `unblock` / `blocks` 要先登录（与其他方法一致）；开库、关库串行，没等 `logout()` 完成就 `login()` 的会等它收尾完；`login()` 没完成时又登出或登录别的用户，前一次正常返回但不会登录上；`resend` 别的账号的消息抛 `ArgumentError`
 - 已经写错的本地数据不会自动清理，怀疑受影响的可以 `logout(clearCache: true)` 后重新登录
 - **JS、PHP**：代码不变，JS 仍用 v0.12.0 的文件
 

@@ -240,7 +240,8 @@ class ImSender {
 
   /// 重发一条 failed 消息，沿用原 clientMsgId（服务端幂等）。rejected 不允许重发。
   Future<ImMessage> resend(ImMessage failed) async {
-    if (failed.status != ImMessageStatus.failed || !failed.isSelf) {
+    // isSelf 是这条消息所属账号的，换号后还要核是不是当前账号的
+    if (failed.status != ImMessageStatus.failed || failed.from != me) {
       throw ArgumentError('只能重发本人的 failed 消息（当前 ${failed.status.name}）');
     }
     final current =
