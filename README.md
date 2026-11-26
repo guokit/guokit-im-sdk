@@ -15,13 +15,13 @@ guokit IM（果壳软件）是可私有部署的即时通讯服务。本仓库�
 
 ## SDK
 
-三个 SDK 共用仓库版本号，当前 `v0.12.1`（变更见 [CHANGELOG.md](CHANGELOG.md)）；JS 没改动的版本不重发，最新是 `v0.12.0`。Flutter 与 PHP 先以 git 依赖分发，JS 先从 [Releases](https://github.com/guokit/guokit-im-sdk/releases) 取（接口稳定后再发 pub.dev / Packagist / npm）：
+三个 SDK 共用仓库版本号，当前 `v0.13.0`（变更见 [CHANGELOG.md](CHANGELOG.md)）。Flutter 与 PHP 先以 git 依赖分发，JS 先从 [Releases](https://github.com/guokit/guokit-im-sdk/releases) 取（接口稳定后再发 pub.dev / Packagist / npm）：
 
 ```yaml
 # Flutter：pubspec.yaml
 dependencies:
   guokit_im:
-    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.12.1 }
+    git: { url: https://github.com/guokit/guokit-im-sdk.git, path: flutter, ref: v0.13.0 }
 ```
 
 ```json

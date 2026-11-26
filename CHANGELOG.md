@@ -2,9 +2,9 @@
 
 三个 SDK（Flutter `guokit_im`、PHP `guokit/im`、JS `@guokit/im`）共用仓库版本号。
 
-## 未发布
+## v0.13.0 — 2026-11-26
 
-举报用户（需要服务端 ≥ 带举报的版本，接入文档 §5.16、§8.8）。
+举报用户，**需要服务端 ≥ v1.22.0**（接入文档 §5.16、§8.8）。JS 从 Release 取 `guokit-im-0.13.0.tgz`、`guokit-im.esm.js`、`guokit-im.min.js`。
 
 - **JS**：新增 `report(target, reason, { detail, messageIds, block })` 与常量 `reportReasons`
 - **JS**：小程序从后台回来时若已在重连，不再丢掉重来（安卓微信上会多占一条连接约 15 秒）。安卓微信真机已验证

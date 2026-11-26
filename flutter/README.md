@@ -15,7 +15,7 @@ dependencies:
     git:
       url: https://github.com/guokit/guokit-im-sdk.git
       path: flutter
-      ref: v0.12.1
+      ref: v0.13.0
 ```
 
 ## 上手
