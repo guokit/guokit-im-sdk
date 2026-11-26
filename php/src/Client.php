@@ -87,6 +87,28 @@ class Client
         return $this->call('POST', '/users/' . rawurlencode($userId) . '/kick');
     }
 
+    /** 注销用户：立即执行、不可恢复，幂等。要导出请先调 exportUser / exportMessages。需服务端 ≥ v1.23.0 */
+    public function deleteUser(string $userId): array
+    {
+        return $this->call('DELETE', '/users/' . rawurlencode($userId));
+    }
+
+    /** 导出用户资料、全部会话与黑名单。需服务端 ≥ v1.23.0 */
+    public function exportUser(string $userId): array
+    {
+        return $this->call('GET', '/users/' . rawurlencode($userId) . '/export');
+    }
+
+    /** 导出用户自己发出的消息一页，返回 items 与 next_cursor（空串即没有下一页）。需服务端 ≥ v1.23.0 */
+    public function exportMessages(string $userId, ?string $cursor = null, int $limit = 100): array
+    {
+        $query = ['limit' => $limit];
+        if ($cursor !== null && $cursor !== '') {
+            $query['cursor'] = $cursor;
+        }
+        return $this->call('GET', '/users/' . rawurlencode($userId) . '/export/messages', ['query' => $query]);
+    }
+
     public function block(string $userId, string $target): array
     {
         return $this->call('PUT', $this->blockPath($userId, $target));

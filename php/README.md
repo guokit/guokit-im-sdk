@@ -47,6 +47,8 @@ try {
 | `issueToken($userId)` | 签令牌，返回 `token` 与 `expires_at` |
 | `setUserStatus($userId, int $status)` | `0` 封禁、`1` 解封 |
 | `kick($userId)` | 踢下线，旧令牌全部作废 |
+| `deleteUser($userId)` | 注销用户：立即执行、不可恢复，消息保留、user_id 不能复用（需服务端 ≥ v1.23.0） |
+| `exportUser($userId)` / `exportMessages($userId, $cursor = null, $limit = 100)` | 导出资料、会话、黑名单 / 他发出的消息（翻页，`next_cursor` 为空串即完）；**先导出再注销**（需服务端 ≥ v1.23.0） |
 | `block($userId, $target)` / `unblock($userId, $target)` | 拉黑 / 解除（`$userId` 拒收 `$target` 的消息） |
 | `blocks($userId, $offset = 0, $limit = 50)` | 黑名单列表，返回 `items` 与 `has_more` |
 | `conversationSettings($userId, $peerId)` | 按「用户 + 对方」查会话设置（对方 `@cs` 或 `@cs:<主体标识>` 即客服会话）；查不到抛 `VALIDATION`（HTTP 404） |

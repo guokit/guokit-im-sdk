@@ -2,6 +2,14 @@
 
 三个 SDK（Flutter `guokit_im`、PHP `guokit/im`、JS `@guokit/im`）共用仓库版本号。
 
+## 未发布
+
+用户注销与个人数据导出（需要服务端 ≥ v1.23.0，接入文档 §4.11）。
+
+- **PHP**：新增 `deleteUser($userId)`、`exportUser($userId)`、`exportMessages($userId, $cursor = null, $limit = 100)`
+- **JS / Flutter**：代码不变（被注销用户的令牌失效走现有重新取令牌流程）
+- 接入文档 §4.11、OpenAPI、Skill、`llms-full.txt` 同步
+
 ## v0.13.0 — 2026-11-26
 
 举报用户，**需要服务端 ≥ v1.22.0**（接入文档 §5.16、§8.8）。JS 从 Release 取 `guokit-im-0.13.0.tgz`、`guokit-im.esm.js`、`guokit-im.min.js`。

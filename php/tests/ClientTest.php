@@ -37,6 +37,27 @@ class ClientTest extends TestCase
         $this->assertSame(['user_ids' => ['u1', 'u2']], json_decode((string) $req->getBody(), true));
     }
 
+    public function testDeleteAndExportUser(): void
+    {
+        $empty = json_encode(['code' => 0, 'message' => 'ok', 'data' => new \stdClass()]);
+        $im = $this->client(new Response(200, [], $empty));
+        $this->assertSame([], $im->deleteUser('u 1'));
+        $req = $this->history[0]['request'];
+        $this->assertSame('DELETE', $req->getMethod());
+        $this->assertSame('/api/im/v1/server/users/u%201', $req->getUri()->getPath());
+
+        $page = json_encode(['code' => 0, 'message' => 'ok', 'data' => ['items' => [], 'next_cursor' => '']]);
+        $im = $this->client(new Response(200, [], $page));
+        $this->assertSame('', $im->exportMessages('u1')['next_cursor']);
+        $req = $this->history[0]['request'];
+        $this->assertSame('/api/im/v1/server/users/u1/export/messages', $req->getUri()->getPath());
+        $this->assertSame('limit=100', $req->getUri()->getQuery());
+
+        $im = $this->client(new Response(200, [], $page));
+        $im->exportMessages('u1', '42', 10);
+        $this->assertSame('limit=10&cursor=42', $this->history[0]['request']->getUri()->getQuery());
+    }
+
     public function testConversationSettingsMethods(): void
     {
         $data = ['conversation_id' => 7, 'peer_user_id' => '@cs', 'pinned' => true, 'pinned_at' => null,

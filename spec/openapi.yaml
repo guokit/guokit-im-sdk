@@ -224,6 +224,22 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+    delete:
+      tags: [服务端]
+      operationId: serverDeleteUser
+      summary: 注销用户
+      description: |
+        立即执行、不可恢复。账号改为「已注销用户」、清头像、停用并断开全部连接，删除他的黑名单；他发过的消息保留在对方的聊天记录里，按保留期清理。
+        之后该 user_id 的导入、签令牌、解封、发消息等一律回 `IM_USER_NOT_FOUND`，不能复用。幂等：已注销的再调也成功。
+        访客与渠道用户按不存在。**要导出请在注销前调导出接口。**
+      security: [{ ApiKey: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmptyOrNotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/im/v1/server/users/{user_id}/token:
     parameters:
       - $ref: '#/components/parameters/UserIdPath'
@@ -279,6 +295,70 @@ paths:
                       - type: object
                         properties:
                           data: { $ref: '#/components/schemas/UserIdData' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/export:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      tags: [服务端]
+      operationId: serverExportUser
+      summary: 导出用户资料
+      description: 资料、全部会话（含本人删除的，不分页）与黑名单。已注销、访客与渠道用户回 `IM_USER_NOT_FOUND`。他发的消息另用 `/export/messages` 翻页导出。
+      security: [{ ApiKey: [] }]
+      responses:
+        '200':
+          description: 成功返回导出数据；或 `IM_USER_NOT_FOUND` / `IM_RATE_LIMITED`（HTTP 200）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/UserExport' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/export/messages:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      tags: [服务端]
+      operationId: serverExportMessages
+      summary: 导出用户发出的消息
+      description: 只导他自己发出的消息，按 id 升序翻页；附件链接为临时地址，收到请转存。撤回的给原文并带 `recalled_at`、`recalled_by`。`next_cursor` 为空串即没有下一页。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: 上一页的 next_cursor，第一页不传 }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+      responses:
+        '200':
+          description: 成功返回一页；或 `IM_USER_NOT_FOUND` / `IM_RATE_LIMITED`（HTTP 200）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            required: [items, next_cursor]
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/Message' }
+                              next_cursor: { type: string }
                   - $ref: '#/components/schemas/ErrorEnvelope'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/KeyInvalid' }
@@ -1878,6 +1958,18 @@ components:
               - type: object
                 properties:
                   data: { $ref: '#/components/schemas/EmptyObject' }
+    OkEmptyOrNotFound:
+      description: 成功时 `data` 为 `{}`；用户不存在为 `IM_USER_NOT_FOUND`，调用超频为 `IM_RATE_LIMITED`（HTTP 200）。
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EmptyObject' }
+              - $ref: '#/components/schemas/ErrorEnvelope'
     OkEmptyOrRateLimited:
       description: 成功时 `data` 为 `{}`；接入应用调用超频时为 `IM_RATE_LIMITED`。
       content:
@@ -2103,6 +2195,34 @@ components:
           type: array
           items: { $ref: '#/components/schemas/BlockItem' }
         has_more: { type: boolean, description: 是否还有下一页 }
+
+    UserExport:
+      type: object
+      required: [user, conversations, blocks]
+      properties:
+        user:
+          type: object
+          properties:
+            user_id: { type: string }
+            nickname: { type: string }
+            avatar_url: { type: string }
+            status: { type: integer }
+            created_at: { type: string }
+        conversations:
+          type: array
+          items:
+            type: object
+            properties:
+              conversation_id: { type: integer, format: int64 }
+              type: { type: string, enum: [c2c, service] }
+              peer_user_id: { type: string }
+              last_msg_at: { type: [string, 'null'] }
+              pinned: { type: boolean }
+              muted: { type: boolean }
+              visible: { type: boolean, description: false 表示本人已删除该会话 }
+        blocks:
+          type: array
+          items: { $ref: '#/components/schemas/BlockItem' }
 
     ReportRequest:
       type: object
