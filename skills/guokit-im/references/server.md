@@ -136,6 +136,7 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 | 收上下线通知 | IM 设置打开「推送用户上下线」后收 `user_state` 回调 `{user_id, online, at, ts}`；下线在断开 30 秒后才推；按 `ts` 保留最新，重启不补发下线，以查询为准 |
 | 识别微信用户是哪个会员 | IM 设置打开「识别微信用户」后收同步回调 `resolve_user` `{channel, account_type, appid, openid, unionid}`，3 秒内回 `{"code":0,"data":{"user_id":"u1001"}}`；不认识回空串。只返回**已确认绑定且已导入**的会员，不要按昵称、手机号猜；查询出错回非 0 的 `code`，别回空串（空串会清掉已有关联） |
 | 每家门店 / 商户一个客服 | `PUT /api/imcs/v1/server/services/{sid}` `{"name"}` 建主体，`PUT …/services/{sid}/agents/{external_id}` `{"nickname"}` 加员工，首次用 `POST …/services/batch` 批量导入；用户给 `@cs:<sid>` 发消息。员工打开工作台前 `POST …/agents/{external_id}/token` 签坐席令牌（**先自己确认他有权限**），页面嵌 `/imcs-widget/desk-loader.js`，App 里 WebView 打开 `/imcs-desk#token=…`。员工不在线靠 after_send 的 `service_id`、`agents_online`、`agent_external_id`、`agent_online` 推手机。员工名单对账用 `PUT …/services/{sid}/agents` 整份替换、`GET …/agents`、`GET …/services`，没人回的用 `GET …/sessions` 查，接待变化可收 `cs_session` 回调；坐席的回复走 before_send（`from` 为 `@cs:<sid>`），要放行或审核。见接入文档 §10.11（服务端 ≥ v1.21.0） |
+| 收用户举报 | IM 设置打开「推送用户举报」后收异步回调 `report` `{report_id, reporter, target, reason, detail, conversation_id, evidence, created_at}`；同一举报人对同一人有待处理单时不再推。`evidence` 里图片等链接是临时地址，收到即转存。处置（如封号）自己调 `PATCH /users/{user_id}`，IM 后台的举报单状态不会跟着变。见接入文档 §8.8 |
 | 代发订单 / 商品卡片 | `POST /messages`，`type: custom`，在 `content.data.im_card` 里带标准卡片外壳（title 必填；fields 放订单号、状态等发送时快照；web_link / app_link / mp_path 分别给网页、App、小程序），客服工作台按它画卡片，见接入文档 §5.9 |
 
 黑名单以接入方为准时：在自家拉黑事务提交后调 IM；IM 调用失败就记一条待重试任务，不要回滚自家拉黑。
@@ -206,4 +207,4 @@ boolean verifyIM(String ts, String sig, byte[] rawBody, String secret) throws Ex
 }
 ```
 
-响应：before_send 回 `{"code":0,"data":{"allow":true}}` 或 `{"code":0,"data":{"allow":false,"reason":"…"}}`；after_send、message_recalled 回 `{"code":0}`；resolve_user 回 `{"code":0,"data":{"user_id":"…"}}`，不认识为空串。
+响应：before_send 回 `{"code":0,"data":{"allow":true}}` 或 `{"code":0,"data":{"allow":false,"reason":"…"}}`；after_send、message_recalled、user_state、cs_session、report 回 `{"code":0}`；resolve_user 回 `{"code":0,"data":{"user_id":"…"}}`，不认识为空串。

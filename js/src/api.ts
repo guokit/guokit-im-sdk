@@ -1,7 +1,7 @@
 import { ClosedError, ImApiError } from './errors.js'
 import {
   conversationFromServer, csStateFromServer, featuresFromServer,
-  type ImBlockItem, type ImConversation, type ImCsState, type ImFeatures,
+  type ImBlockItem, type ImConversation, type ImCsState, type ImFeatures, type ImReportResult,
 } from './models.js'
 import type { HttpRequest, HttpResult, ImFile, ImPlatform } from './platform/types.js'
 import { parseCst } from './time.js'
@@ -106,6 +106,11 @@ export class ImApi {
       items: d.items.map((e: Raw) => ({ userId: e.user_id, createdAt: parseCst(e.created_at) })),
       hasMore: d.has_more,
     }
+  }
+
+  async report(target: string, reason: string, detail?: string, messageIds?: number[], block?: boolean): Promise<ImReportResult> {
+    const d = await this.json('POST', '/reports', { body: { target, reason, detail, message_ids: messageIds, block } })
+    return { reportId: d.report_id, duplicated: d.duplicated }
   }
 
   async csState(serviceId?: string): Promise<ImCsState> {

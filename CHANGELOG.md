@@ -4,7 +4,13 @@
 
 ## 未发布
 
+举报用户（需要服务端 ≥ 带举报的版本，接入文档 §5.16、§8.8）。
+
+- **JS**：新增 `report(target, reason, { detail, messageIds, block })` 与常量 `reportReasons`
 - **JS**：小程序从后台回来时若已在重连，不再丢掉重来（安卓微信上会多占一条连接约 15 秒）。安卓微信真机已验证
+- **Flutter**：新增 `report(target, reason, {detail, messageIds, block})` 与常量 `reportReasons`
+- **PHP**：代码不变；回调事件说明补 `report`（`CallbackEvent` 文档顺手补 `cs_session`）
+- 接入文档 §5.16、§8.8、OpenAPI、Skill、`llms-full.txt` 同步
 
 ## v0.12.1 — 2026-11-25
 

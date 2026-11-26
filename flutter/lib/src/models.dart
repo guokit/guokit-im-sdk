@@ -684,6 +684,9 @@ class ImBlockItem {
   final DateTime createdAt;
 }
 
+/// 举报原因编码（接入文档 §5.16）：色情低俗、诈骗、骚扰辱骂、广告营销、违法违规、其他。
+const reportReasons = ['porn', 'fraud', 'harass', 'ad', 'illegal', 'other'];
+
 /// 客服接待状态（接入文档 §10.4）。
 enum ImCsStatus {
   /// 当前没有进行中的咨询。

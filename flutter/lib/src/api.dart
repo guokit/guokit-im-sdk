@@ -290,6 +290,34 @@ class ImApi {
   Future<void> unblock(String target) =>
       _json('DELETE', '/blocks/${Uri.encodeComponent(target)}');
 
+  /// `POST /reports`：举报用户。不传的可选项不发。
+  Future<({int reportId, bool duplicated})> report(
+    String target,
+    String reason, {
+    String? detail,
+    List<int>? messageIds,
+    bool block = false,
+  }) async {
+    final d = _asMap(
+      await _json(
+        'POST',
+        '/reports',
+        body: {
+          'target': target,
+          'reason': reason,
+          if (detail != null && detail.isNotEmpty) 'detail': detail,
+          if (messageIds != null && messageIds.isNotEmpty)
+            'message_ids': messageIds,
+          if (block) 'block': true,
+        },
+      ),
+    );
+    return (
+      reportId: (d['report_id'] as num).toInt(),
+      duplicated: d['duplicated'] as bool,
+    );
+  }
+
   /// `GET /blocks`：我的黑名单一页，按拉黑时间倒序。
   Future<({List<ImBlockItem> items, bool hasMore})> blocks({
     int? offset,

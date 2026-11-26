@@ -201,3 +201,12 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 ## 7. 业务卡片
 
 订单、商品、文章这类「点开是详情页」的消息用 `custom` 发，并在 `data.im_card` 里带标准卡片外壳：`title` 必填，`kind`、`subtitle`、`image`、`fields`（最多 6 行发送时快照）可选，链接按端分 `web_link`（https，网页与客服工作台）、`app_link`（App 内跳转）、`mp_path` + 可选 `mp_appid`（小程序）。不合规范整条拒收（`VALIDATION`）。自家已有卡片协议的，在同一个 `data` 里加 `im_card` 键即可。Flutter SDK 收到时用 `msg.card` 解析。详见接入文档 §5.9。
+
+## 8. 举报
+
+- `POST /api/im/v1/reports` `{target, reason, detail?, message_ids?, block?}` → `{report_id, duplicated}`；JS / Flutter SDK 是 `report(target, reason, {detail, messageIds, block})`
+- `reason` 只能是 `porn` / `fraud` / `harass` / `ad` / `illegal` / `other`（SDK 导出 `reportReasons`），入口文案自己定
+- 证据用长按对方消息多选，传消息 `id`（不是 `client_msg_id`），最多 10 条、同一会话、必须是对方发的；已撤回的也能选
+- 「同时拉黑」勾选就传 `block: true`，效果同拉黑接口；拉黑后照常刷新黑名单
+- `duplicated: true` 时照样提示「已收到举报」，不要当失败；超频回 `IM_RATE_LIMITED`（每人每天 20 张），提示明天再试
+- 处置结果不会推给举报人，界面不要承诺「处理后通知你」

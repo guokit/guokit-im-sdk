@@ -2,7 +2,8 @@ import { ImApi, type Raw } from './api.js'
 import { Emitter } from './emitter.js'
 import { isKickedOut } from './errors.js'
 import type {
-  ImBlockItem, ImConnectionState, ImConversation, ImCsState, ImFeatures, ImMessage, ImSendProgress, ImToken, ImTyping,
+  ImBlockItem, ImConnectionState, ImConversation, ImCsState, ImFeatures, ImMessage, ImReportReason, ImReportResult,
+  ImSendProgress, ImToken, ImTyping,
 } from './models.js'
 import { browserPlatform, isBrowser } from './platform/browser.js'
 import type { ImFile, ImPlatform, NetworkChange } from './platform/types.js'
@@ -343,6 +344,19 @@ export class GuokitIm {
   blocks(opts: { offset?: number; limit?: number } = {}): Promise<{ items: ImBlockItem[]; hasMore: boolean }> {
     const s = this.session()
     return this.run(s, () => s.api.blocks(opts.offset, opts.limit))
+  }
+
+  /**
+   * 举报用户。messageIds 是对方发的消息 id（最多 10 条，同一会话），作证据存快照；block 为 true 时同时拉黑。
+   * 对同一个人已有待处理的举报时返回原单（duplicated 为 true）。每人每天最多新建 20 张，超出是 IM_RATE_LIMITED。
+   */
+  report(
+    target: string,
+    reason: ImReportReason,
+    opts: { detail?: string; messageIds?: number[]; block?: boolean } = {},
+  ): Promise<ImReportResult> {
+    const s = this.session()
+    return this.run(s, () => s.api.report(target, reason, opts.detail, opts.messageIds, opts.block))
   }
 
   // ---------------- 客服 ----------------

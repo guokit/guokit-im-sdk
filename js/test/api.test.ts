@@ -24,6 +24,15 @@ test('拼 URL、带令牌、成功取 data', async () => {
   expect(p.requests[1].headers['Content-Type']).toBe('application/json')
 })
 
+test('举报：入参转蛇形、返回转驼峰，不传的字段不发', async () => {
+  const { p, api } = setup()
+  p.routes['POST /reports'] = () => ok({ report_id: 9, duplicated: false })
+  expect(await api.report('u2', 'harass', '骚扰', [11, 12], true)).toEqual({ reportId: 9, duplicated: false })
+  expect(JSON.parse(p.requests[0].body!)).toEqual({ target: 'u2', reason: 'harass', detail: '骚扰', message_ids: [11, 12], block: true })
+  await api.report('u3', 'ad')
+  expect(JSON.parse(p.requests[1].body!)).toEqual({ target: 'u3', reason: 'ad' })
+})
+
 test('两个请求同时 401 只换一次令牌，各重试一次', async () => {
   const { p, api, calls } = setup()
   p.routes['GET /me'] = r => (r.headers.Authorization === 'Bearer t1' ? fail('IM_TOKEN_INVALID', 401) : ok({ features: { file_max_mb: 5 } }))

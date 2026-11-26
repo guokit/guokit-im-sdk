@@ -77,6 +77,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
 | `clearConversation(convId)` / `deleteConversation(convId)` | 清空本人这一侧的记录 / 删除会话（同时清空），见下方常见问题 |
 | `block / unblock / blocks` | 黑名单 |
+| `report(target, reason, {detail, messageIds, block})` | 举报用户：`reason` 取 `reportReasons` 之一，`messageIds` 是对方发的消息作证据（最多 10 条），`block: true` 同时拉黑；同一人有待处理的举报时返回原单（`duplicated` 为 true） |
 | `csState({serviceId})` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
 | `leaveCs({name, phone, email})` | 没有客服在线时留联系方式，返回留言单号，见下方常见问题 |
 | `imageUrl(msg)` / `voiceUrl(msg)` / `fileUrl(msg)` / `videoUrl(msg)` / `videoCoverUrl(msg)` | 返回可用的图片 / 语音 / 文件下载 / 视频 / 视频封面地址；上传的链接约 24 小时过期，SDK 会在快过期时重拉 |

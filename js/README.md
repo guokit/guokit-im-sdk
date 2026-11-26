@@ -82,7 +82,7 @@ await im.sendVideo(to, file, { durationMs, width, height, cover })        // H.2
 
 ### 其他方法
 
-`pendingTo` `markAllRead` `setPinned` `setMuted` `clearConversation` `deleteConversation` `recall` `sendTyping` `features` `block` `unblock` `blocks` `sendLocation` `sendCustom` `foreground` `logout` `dispose`；工具 `messageCard(m)`（业务卡片）、`csServiceId(userId)`。完整签名看类型声明。
+`pendingTo` `markAllRead` `setPinned` `setMuted` `clearConversation` `deleteConversation` `recall` `sendTyping` `features` `block` `unblock` `blocks` `report` `sendLocation` `sendCustom` `foreground` `logout` `dispose`；工具 `messageCard(m)`（业务卡片）、`csServiceId(userId)`；常量 `reportReasons`（举报原因编码）。完整签名看类型声明。
 
 接口失败 reject `ImApiError`（`code` / `message` / `httpStatus` / `isTemporary`）。`send*` `resend` 例外：发送失败不抛，看消息的 `status`；它们与 `recall` `rateCs` `leaveCs` 的参数错误（`TypeError` / `RangeError`）、未登录是**同步抛**，其余返回 Promise 的方法未登录时 reject。
 

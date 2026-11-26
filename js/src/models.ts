@@ -124,6 +124,16 @@ export interface ImBlockItem {
   createdAt: number
 }
 
+/** 举报原因编码：色情低俗、诈骗、骚扰辱骂、广告营销、违法违规、其他。 */
+export const reportReasons = ['porn', 'fraud', 'harass', 'ad', 'illegal', 'other'] as const
+export type ImReportReason = (typeof reportReasons)[number]
+
+export interface ImReportResult {
+  reportId: number
+  /** true：对同一个人已有待处理的举报，返回的是原单，没有新建 */
+  duplicated: boolean
+}
+
 export type ImCsStatus = 'none' | 'bot' | 'queued' | 'active'
 
 export interface ImCsState {

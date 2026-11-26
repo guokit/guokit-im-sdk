@@ -1085,6 +1085,39 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/im/v1/reports:
+    post:
+      tags: [客户端]
+      operationId: submitReport
+      summary: 举报用户
+      description: |
+        令牌用户举报 `target`，可附最多 10 条对方发的消息作证据（提交时存快照，对方撤回或保留期到期也还在），可同时拉黑对方。
+        对同一 `target` 已有待处理的举报时不新建，返回原单且 `duplicated` 为 true。每人每天最多新建 20 张，超出回 `IM_RATE_LIMITED`（HTTP 200）。
+        访客不能举报（400 `VALIDATION`）；被举报人不存在或不是普通用户回 `IM_USER_NOT_FOUND`（HTTP 200）。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportRequest' }
+      responses:
+        '200':
+          description: 成功返回举报单；或 `IM_USER_NOT_FOUND` / `IM_RATE_LIMITED`（HTTP 200，code 非 0）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/ReportResult' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   # ---------------- 客服接口 ----------------
   /api/imcs/v1/state:
     get:
@@ -2070,6 +2103,30 @@ components:
           type: array
           items: { $ref: '#/components/schemas/BlockItem' }
         has_more: { type: boolean, description: 是否还有下一页 }
+
+    ReportRequest:
+      type: object
+      required: [target, reason]
+      properties:
+        target: { type: string, description: 被举报人 user_id，须为普通 IM 用户，不能是自己或客服 }
+        reason:
+          type: string
+          enum: [porn, fraud, harass, ad, illegal, other]
+          description: porn 色情低俗、fraud 诈骗、harass 骚扰辱骂、ad 广告营销、illegal 违法违规、other 其他
+        detail: { type: string, maxLength: 500, description: 举报说明，可空 }
+        message_ids:
+          type: array
+          maxItems: 10
+          items: { type: integer, format: int64 }
+          description: 证据消息 id，须是被举报人发的、在同一会话、举报人是该会话成员；已撤回的也可以
+        block: { type: boolean, description: 是否同时拉黑对方，默认 false }
+
+    ReportResult:
+      type: object
+      required: [report_id, duplicated]
+      properties:
+        report_id: { type: integer, format: int64 }
+        duplicated: { type: boolean, description: true 表示命中了待处理的原单，没有新建 }
 
     # ---- 消息内容 ----
     TextContent:

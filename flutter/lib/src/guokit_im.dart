@@ -526,6 +526,25 @@ class GuokitIm {
     int? limit,
   }) => _call((s) => s.api.blocks(offset: offset, limit: limit));
 
+  /// 举报用户（接入文档 §5.16）。[reason] 取 [reportReasons] 之一；[messageIds] 是对方发的消息 id
+  /// （最多 10 条，同一会话），作证据存快照；[block] 为 true 时同时拉黑。
+  /// 对同一个人已有待处理的举报时返回原单（duplicated 为 true）。每人每天最多新建 20 张，超出是 IM_RATE_LIMITED。
+  Future<({int reportId, bool duplicated})> report(
+    String target,
+    String reason, {
+    String? detail,
+    List<int>? messageIds,
+    bool block = false,
+  }) => _call(
+    (s) => s.api.report(
+      target,
+      reason,
+      detail: detail,
+      messageIds: messageIds,
+      block: block,
+    ),
+  );
+
   // ---------------- 客服 ----------------
 
   /// 当前客服接待状态，用于客服会话页顶部的「排队中，前面还有 N 位」状态条。

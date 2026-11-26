@@ -55,13 +55,13 @@
 | 400 | `VALIDATION` | 参数不合法，`message` 说明原因 |
 | 401 | `IM_KEY_INVALID` | `X-Api-Key` 缺失、错误，或接入应用已停用 |
 | 401 | `IM_TOKEN_INVALID` | 用户令牌缺失、验签失败、已过期，或用户已被封禁 / 踢下线 → 找后端换新令牌 |
-| 200 | `IM_USER_NOT_FOUND` | 用户不存在（签令牌、封禁、踢下线、发消息的收发方） |
+| 200 | `IM_USER_NOT_FOUND` | 用户不存在（签令牌、封禁、踢下线、发消息的收发方；举报的被举报人不存在或不是普通用户） |
 | 200 | `IM_USER_DISABLED` | 用户已封禁（签令牌、发消息的收发方） |
 | 200 | `IM_MESSAGE_REJECTED` | 消息被发送前回调拒绝，`message` 形如 `消息被拒绝：<原因>` |
 | 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），`message` 为「对方已将你拉黑」 |
 | 200 | `IM_RECALL_NOT_ALLOWED` | 不能撤回：站点没开启撤回，或超过时限（§5.12），`message` 说明原因 |
 | 200 | `CS_SERVICE_NOT_FOUND` / `CS_AGENT_NOT_FOUND` / `CS_SERVICE_DISABLED` | 客服主体不存在 / 坐席不存在 / 主体已停用（§10.11 的服务端接口） |
-| 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息超限（§9） |
+| 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息、举报超限（§9） |
 | 403 | `FORBIDDEN` | 客户端访问了自己不在其中（或不存在）的会话 |
 | 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10）。消息不存在：撤回时（§4.10、§5.12），不是本人发的也按不存在 |
 | 403 | `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN` | IM 站点授权异常，联系 IM 服务提供方 |
@@ -284,6 +284,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | POST | `/messages/{id}/recall` | 撤回自己的消息 |
 | GET | `/recalls` | 撤回增量补齐 |
 | POST | `/conversations/{id}/typing` | 正在输入 |
+| POST | `/reports` | 举报用户 |
 
 ### 5.1 发消息 `POST /messages`
 
@@ -613,6 +614,25 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - 对方不在线、把你拉黑时同样返回成功。不是会话成员 → 403 `FORBIDDEN`；超频 → `IM_RATE_LIMITED`。这个接口失败都可以忽略。
 - 客服会话会告诉正在接待的坐席。网页访客与微信用户不能调（400）。
 
+### 5.16 举报用户 `POST /reports`
+
+App 上架审核要求能举报其他用户（App Store 审核指南 1.2）。运营方在 IM 后台「IM 接入应用 → 举报处置」里处置，也可以打开 report 回调由你方后台处理（§8.8）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `target` | string | 被举报人 user_id，必填。不能是自己或客服 |
+| `reason` | string | 必填：`porn` 色情低俗 / `fraud` 诈骗 / `harass` 骚扰辱骂 / `ad` 广告营销 / `illegal` 违法违规 / `other` 其他 |
+| `detail` | string | 举报说明，可空，≤500 字 |
+| `message_ids` | int[] | 证据消息 id，可空，最多 10 条。须是被举报人发的、在同一会话、你是该会话成员；已撤回的、你清空过的也可以 |
+| `block` | bool | 是否同时拉黑对方，默认 false（等同 §5.7 拉黑） |
+
+返回 `{ "report_id": 9, "duplicated": false }`。
+
+- 证据在提交时存一份快照：对方之后撤回、或消息过了保留期，后台照样看得到。
+- 对同一个人已有待处理的举报时不新建，返回原单且 `duplicated` 为 `true`（`block` 照常生效），不占每日次数。
+- 每人每天最多新建 20 张，超出 → `IM_RATE_LIMITED`；被举报人不存在或不是普通用户 → `IM_USER_NOT_FOUND`；证据不符合要求 → 400 `VALIDATION`。网页访客与微信用户不能举报（400）。
+- 处置结果不通知举报人。
+
 ## 6. 长连接
 
 - 地址：`wss://im.example.com/api/im/v1/connect/websocket`
@@ -766,14 +786,14 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 ## 8. 回调
 
-在「IM 设置」配置：回调地址（http/https，建议 https）、回调密钥（≤128 字符，**务必设置**）、是否开启发送前回调、发送前回调失败策略（放行 / 拒绝，默认放行）、是否推送用户上下线（默认关闭，见 §8.4）、是否识别微信用户（默认关闭，见 §8.6）。
+在「IM 设置」配置：回调地址（http/https，建议 https）、回调密钥（≤128 字符，**务必设置**）、是否开启发送前回调、发送前回调失败策略（放行 / 拒绝，默认放行）、是否推送用户上下线（默认关闭，见 §8.4）、是否识别微信用户（默认关闭，见 §8.6）、是否推送用户举报（默认关闭，见 §8.8）。
 
 所有回调都是 `POST`，`Content-Type: application/json`，请求头：
 
 | 头 | 说明 |
 |---|---|
-| `X-Im-Event` | `before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` |
-| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / message_recalled / user_state）的每次重试**保持不变**，用于去重 |
+| `X-Im-Event` | `before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` / `cs_session` / `report` |
+| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / message_recalled / user_state / cs_session / report）的每次重试**保持不变**，用于去重 |
 | `X-Im-Timestamp` | 发出时刻的 Unix 秒 |
 | `X-Im-Signature` | `hex(HMAC-SHA256(回调密钥, 时间戳 + "\n" + 原始请求体))` |
 
@@ -930,6 +950,21 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 - 用来撤掉已发的离线推送、更新你自己的归档。`by` 为 `sender` 发送者 / `agent` 坐席 / `server` 接入方。
 - **可能比对应的 `after_send` 先到**（after_send 失败会退避重投，也可能由后台手动重投）：按 `message_id` 记下已撤回，之后再收到它的 `after_send` 就不要推送原文。已经收到的原文服务端收不回。
 
+### 8.8 report（异步）
+
+- 时机：「IM 设置」打开「推送用户举报」且配了回调地址。用户新提交举报（§5.16）后投递，规则同 after_send；命中待处理原单（`duplicated`）的不推。不开也能在 IM 后台处置。
+- `data`：
+
+```json
+{ "report_id": 9, "reporter": "u1002", "target": "u1001", "reason": "harass", "detail": "反复骚扰",
+  "conversation_id": 12,
+  "evidence": [ { "message_id": 1024, "seq": 37, "type": "text", "content": { "text": "……" }, "created_at": "2026-11-26 01:10:00" } ],
+  "created_at": "2026-11-26 09:00:00" }
+```
+
+- `evidence` 是提交时的快照，`content` 形状同消息内容（§5.1）；图片、语音、文件、视频的链接是投递时签发的临时地址，**收到请立即转存**，过期后打不开。
+- 处置（如封禁）用服务端接口 §4.4 自己做；IM 后台的举报单状态不会因此改变，两边各自记录。
+
 ## 9. 限制与配额
 
 | 项 | 上限 |
@@ -937,6 +972,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 接入应用调用服务端接口 | 每应用每分钟 600 次、每天 200000 次（进程内计数，按自然分钟 / 自然日清零），超出回 `IM_RATE_LIMITED` |
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
 | 撤回、正在输入 | 各自每个用户 10 秒内 20 次，超出回 `IM_RATE_LIMITED` |
+| 举报 | 每人每天新建 20 张（返回原单不计），超出回 `IM_RATE_LIMITED`；证据最多 10 条，说明 ≤500 字 |
 | 撤回时限 | 站点配置，0–1440 分钟，0 = 没开启（默认）；服务端接口撤回不限时 |
 | 上传 | 每个用户 10 秒内 20 次；文件与视频另限每人每天 100 个（上传失败的也计）。超出回 `IM_RATE_LIMITED` |
 | 文件、视频消息 | 默认关闭；站点分别配置大小上限，1–100MB，0 = 不开启 |
@@ -951,7 +987,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 令牌有效期 | 默认 168 小时，可配 1–8760 小时 |
 | before_send | 超时 2 秒，不重试 |
 | resolve_user | 超时 3 秒，不重试；同一微信用户 10 分钟内只问一次 |
-| after_send / message_recalled / user_state | 写入即投递，另有每分钟一轮兜底（每轮最多 100 条）；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
+| after_send / message_recalled / user_state / cs_session / report | 写入即投递，另有每分钟一轮兜底（每轮最多 100 条）；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
 | 查询在线状态 | 每次 1–100 个 user_id |
 | 下线判定 | 连接全部断开 30 秒后仍未重连才算下线并推 user_state |
 | Origin 白名单 | 最多 20 个 |

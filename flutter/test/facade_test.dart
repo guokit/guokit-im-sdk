@@ -60,6 +60,7 @@ void main() {
   late FakeRealtime rt;
   late List<String> requests;
   var leaveBody = '';
+  var reportBody = '';
 
   // 服务端的撤回增量（cursor 固定为 'r1'，每次都重复给全部）。
   late List<Map<String, dynamic>> recalled;
@@ -155,6 +156,9 @@ void main() {
           if (req.url.path.endsWith('/leave')) {
             leaveBody = req.body;
             data = {'ticket_no': 'T1'};
+          } else if (req.url.path.endsWith('/reports')) {
+            reportBody = req.body;
+            data = {'report_id': 9, 'duplicated': false};
           } else if (m != null) {
             final conv = int.parse(m.group(1)!);
             final q = req.url.queryParameters;
@@ -523,6 +527,28 @@ void main() {
     expect(() => im.rateCs(1, 6), throwsArgumentError);
     expect(() => im.rateCs(1, 5, comment: '字' * 201), throwsArgumentError);
     expect(requests.length, before);
+  });
+
+  test('report 提交举报并返回单号，不传的可选项不发', () async {
+    await im.login('u1');
+    final r = await im.report(
+      'u2',
+      'harass',
+      detail: '骚扰',
+      messageIds: [11, 12],
+      block: true,
+    );
+    expect(r.reportId, 9);
+    expect(r.duplicated, false);
+    expect(jsonDecode(reportBody), {
+      'target': 'u2',
+      'reason': 'harass',
+      'detail': '骚扰',
+      'message_ids': [11, 12],
+      'block': true,
+    });
+    await im.report('u3', 'ad');
+    expect(jsonDecode(reportBody), {'target': 'u3', 'reason': 'ad'});
   });
 
   test('leaveCs 去空白后提交并返回单号；不合要求直接抛 ArgumentError，不发请求', () async {
