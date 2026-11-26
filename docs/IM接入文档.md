@@ -55,7 +55,7 @@
 | 400 | `VALIDATION` | 参数不合法，`message` 说明原因 |
 | 401 | `IM_KEY_INVALID` | `X-Api-Key` 缺失、错误，或接入应用已停用 |
 | 401 | `IM_TOKEN_INVALID` | 用户令牌缺失、验签失败、已过期，或用户已被封禁 / 踢下线 → 找后端换新令牌 |
-| 200 | `IM_USER_NOT_FOUND` | 用户不存在或已注销（签令牌、解封、踢下线、发消息的收发方、导入已注销的 user_id、导出；举报的被举报人不存在或不是普通用户） |
+| 200 | `IM_USER_NOT_FOUND` | 用户不存在或已注销（签令牌、封禁不存在的用户、解封、踢下线、发消息的收发方、导入已注销的 user_id、导出；举报的被举报人不存在或不是普通用户） |
 | 200 | `IM_USER_DISABLED` | 用户已封禁（签令牌、发消息的收发方） |
 | 200 | `IM_MESSAGE_REJECTED` | 消息被发送前回调拒绝，`message` 形如 `消息被拒绝：<原因>` |
 | 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），`message` 为「对方已将你拉黑」 |
@@ -171,19 +171,6 @@ throw new RuntimeException("IM 签令牌失败：{$r['code']} {$r['message']}");
 - `PATCH /users/{user_id}`，请求 `{"status": 0}`（`0` 封禁、`1` 正常），返回 `{"user_id", "status"}`。封禁使该用户**全部已签令牌立即失效**并断开所有长连接；解封不恢复旧令牌，需重新签发。
 - `POST /users/{user_id}/kick`，无请求体，返回 `{"user_id"}`。效果同封禁的失效与断连，但用户仍正常、可重新签令牌，适合「改密码 / 退出全部设备」。
 
-### 4.11 注销与导出
-
-用户在你方 App 里注销账号时（你方的冷静期走完后）调注销；用户要求查阅复制个人信息时调导出。**先导出、再注销**：注销后导出回 `IM_USER_NOT_FOUND`。
-
-- `DELETE /users/{user_id}`：注销，返回 `{}`，**立即执行、不可恢复**，幂等（已注销的再调也成功）
-  - 账号改为「已注销用户」、清头像、停用，全部令牌失效并断开长连接；删除他的黑名单；结束他在各客服主体进行中的接待（`cs_session` 的 `reason` 为 `account_deleted`）
-  - 他发过的消息**保留**在对方的聊天记录里，发送者显示「已注销用户」，按「IM 设置 → 消息保留天数」清理；对方会话里不再显示对方已读
-  - 之后这个 user_id 的导入（单个回 `IM_USER_NOT_FOUND`，批量跳过、不改资料）、签令牌、解封、踢下线、发消息一律当不存在；**user_id 不能复用**，新用户请用新的 user_id
-  - 访客与微信等渠道用户按不存在（同 §4.4 的 `PATCH`），要处理在 IM 后台操作
-- `GET /users/{user_id}/export`：`{user: {user_id, nickname, avatar_url, status, created_at}, conversations: [{conversation_id, type, peer_user_id, last_msg_at, pinned, muted, visible}], blocks: [{user_id, created_at}]}`。`conversations` 含他本人删除的会话（`visible` 为 false），不分页
-- `GET /users/{user_id}/export/messages?cursor=&limit=`：他**自己发出的**消息，按发送先后翻页，`limit` 默认、最大 100；返回 `{items, next_cursor}`，`next_cursor` 为空串即没有下一页。消息对象同 §5.3，撤回的给原文并带 `recalled_at`、`recalled_by`；图片等附件链接是临时地址，收到请转存
-- 别人发给他的消息、针对他的举报不在导出范围内（含他人的个人信息）
-
 ### 4.5 代发消息 `POST /messages`
 
 请求体同客户端发消息（§5.1），多一个 `from` 字段指定发送者。走与客户端完全相同的流程：校验、限速（按 `from` 计）、幂等、发送前回调、推送、发送后回调。返回消息对象。
@@ -275,6 +262,19 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 无请求体，返回撤回后的消息对象。**不限时、不看站点的撤回开关**，用于处理违规内容。效果与用户自己撤回相同（§5.12），`content.by` 为 `server`。
 渠道用户（网页访客、微信）参与的会话、平台客服发的消息都按不存在处理，回 404 `VALIDATION`；客服主体（§10.11）的坐席发的可以撤，收的人是访客也行。已撤回的再调返回同一结果，不再推送、不再回调。
 撤回后 §4.6 的审计查询也只给撤回后的形态，**原文只在 IM 后台的「消息查询」里看得到**。
+
+### 4.11 注销与导出
+
+用户在你方 App 里注销账号时（你方的冷静期走完后）调注销；用户要求查阅复制个人信息时调导出。**先导出、再注销**：注销后导出回 `IM_USER_NOT_FOUND`。
+
+- `DELETE /users/{user_id}`：注销，返回 `{}`，**立即执行、不可恢复**，幂等（已注销的再调也成功）
+  - 账号改为「已注销用户」、清头像、停用，全部令牌失效并断开长连接；删除他的黑名单；结束他在各客服主体进行中的接待（`cs_session` 的 `reason` 为 `account_deleted`）
+  - 他发过的消息**保留**在对方的聊天记录里，发送者显示「已注销用户」，按「IM 设置 → 消息保留天数」清理；对方会话里不再显示对方已读
+  - 之后这个 user_id 的导入（单个回 `IM_USER_NOT_FOUND`，批量跳过、不改资料）、签令牌、解封、踢下线、发消息一律当不存在；**user_id 不能复用**，新用户请用新的 user_id
+  - 访客与微信等渠道用户按不存在（同 §4.4 的 `PATCH`），要处理在 IM 后台操作
+- `GET /users/{user_id}/export`：`{user: {user_id, nickname, avatar_url, status, created_at}, conversations: [{conversation_id, type, peer_user_id, last_msg_at, pinned, muted, visible}], blocks: [{user_id, created_at}]}`。`conversations` 含他本人删除的会话（`visible` 为 false），不分页
+- `GET /users/{user_id}/export/messages?cursor=&limit=`：他**自己发出的**消息，按发送先后翻页，`limit` 默认、最大 100；返回 `{items, next_cursor}`，`next_cursor` 为空串即没有下一页。消息对象同 §5.3，撤回的给原文并带 `recalled_at`、`recalled_by`；图片等附件链接是临时地址，收到请转存
+- 别人发给他的消息、针对他的举报不在导出范围内（含他人的个人信息）
 
 ## 5. 客户端接口（App / Web 调用）
 

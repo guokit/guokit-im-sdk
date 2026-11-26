@@ -46,6 +46,13 @@ class ClientTest extends TestCase
         $this->assertSame('DELETE', $req->getMethod());
         $this->assertSame('/api/im/v1/server/users/u%201', $req->getUri()->getPath());
 
+        $ex = json_encode(['code' => 0, 'message' => 'ok', 'data' => ['user' => ['user_id' => 'u1'], 'conversations' => [], 'blocks' => []]]);
+        $im = $this->client(new Response(200, [], $ex));
+        $this->assertSame('u1', $im->exportUser('u1')['user']['user_id']);
+        $req = $this->history[0]['request'];
+        $this->assertSame('GET', $req->getMethod());
+        $this->assertSame('/api/im/v1/server/users/u1/export', $req->getUri()->getPath());
+
         $page = json_encode(['code' => 0, 'message' => 'ok', 'data' => ['items' => [], 'next_cursor' => '']]);
         $im = $this->client(new Response(200, [], $page));
         $this->assertSame('', $im->exportMessages('u1')['next_cursor']);
