@@ -1,7 +1,8 @@
 import { ClosedError, ImApiError } from './errors.js'
 import {
-  conversationFromServer, csStateFromServer, featuresFromServer,
-  type ImBlockItem, type ImConversation, type ImCsState, type ImFeatures, type ImReportResult,
+  conversationFromServer, csStateFromServer, featuresFromServer, friendFromServer, friendRequestFromServer,
+  type ImAddFriendResult, type ImBlockItem, type ImConversation, type ImCsState, type ImFeatures, type ImFriend,
+  type ImFriendGroup, type ImFriendRequest, type ImReportResult,
 } from './models.js'
 import type { HttpRequest, HttpResult, ImFile, ImPlatform } from './platform/types.js'
 import { parseCst } from './time.js'
@@ -113,6 +114,57 @@ export class ImApi {
     return { reportId: d.report_id, duplicated: d.duplicated }
   }
 
+  async friends(cursor?: string | null, limit?: number): Promise<{ items: ImFriend[]; nextCursor: string | null }> {
+    const d = await this.json('GET', '/friends', { query: { cursor, limit } })
+    return { items: d.items.map(friendFromServer), nextCursor: d.next_cursor || null }
+  }
+
+  async addFriend(target: string, message?: string): Promise<ImAddFriendResult> {
+    const d = await this.json('POST', '/friends', { body: { target, message } })
+    return { status: d.status, requestId: d.request_id ?? null }
+  }
+
+  deleteFriend(target: string): Promise<unknown> {
+    return this.json('DELETE', `/friends/${encodeURIComponent(target)}`)
+  }
+
+  async setFriend(target: string, body: { remark?: string; group_ids?: number[] }): Promise<ImFriend> {
+    return friendFromServer(await this.json('PUT', `/friends/${encodeURIComponent(target)}`, { body }))
+  }
+
+  async friendRequests(box: 'in' | 'out', cursor?: string | null, limit?: number): Promise<{ items: ImFriendRequest[]; nextCursor: string | null }> {
+    const d = await this.json('GET', '/friend-requests', { query: { box, cursor, limit } })
+    return { items: d.items.map(friendRequestFromServer), nextCursor: d.next_cursor || null }
+  }
+
+  async acceptFriend(requestId: number): Promise<ImFriend> {
+    return friendFromServer(await this.json('POST', `/friend-requests/${requestId}/accept`))
+  }
+
+  rejectFriend(requestId: number): Promise<unknown> {
+    return this.json('POST', `/friend-requests/${requestId}/reject`)
+  }
+
+  async friendGroups(): Promise<ImFriendGroup[]> {
+    return (await this.json('GET', '/friend-groups')).items.map(groupFromServer)
+  }
+
+  async createFriendGroup(name: string): Promise<ImFriendGroup> {
+    return groupFromServer(await this.json('POST', '/friend-groups', { body: { name } }))
+  }
+
+  async updateFriendGroup(id: number, body: { name?: string; sort?: number }): Promise<ImFriendGroup> {
+    return groupFromServer(await this.json('PUT', `/friend-groups/${id}`, { body }))
+  }
+
+  deleteFriendGroup(id: number): Promise<unknown> {
+    return this.json('DELETE', `/friend-groups/${id}`)
+  }
+
+  setFriendAddPolicy(policy: number): Promise<unknown> {
+    return this.json('PUT', '/me/friend-settings', { body: { add_policy: policy } })
+  }
+
   async csState(serviceId?: string): Promise<ImCsState> {
     return csStateFromServer(await this.json('GET', '/state', { prefix: CS, query: { service_id: serviceId || null } }))
   }
@@ -194,6 +246,10 @@ export class ImApi {
     if (d.code === 0) return d.data ?? {}
     throw new ImApiError(String(d.code), d.message ?? '', res.status)
   }
+}
+
+function groupFromServer(j: Raw): ImFriendGroup {
+  return { id: j.id, name: j.name, sort: j.sort ?? 0 }
 }
 
 /** 小程序没有 URLSearchParams。 */

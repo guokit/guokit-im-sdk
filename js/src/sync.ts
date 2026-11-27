@@ -14,7 +14,11 @@ export interface SyncHooks {
   /** 队列任务失败，只关心踢下线。 */
   onError(e: unknown): void
   onTyping(conversationId: number, from: string, ttlMs: number): void
+  /** friend_request / friend_changed / friend_groups_changed，由门面交给好友缓存。 */
+  onFriendPush(ev: Raw): void
 }
+
+const FRIEND_EVENTS = ['friend_request', 'friend_changed', 'friend_groups_changed']
 
 /**
  * 对账、推送处理、补拉。对账与推送进同一个串行队列，避免并发补拉交错；单个任务失败不影响后续。
@@ -64,6 +68,10 @@ export class Sync {
     if (ev.event === 'typing') {
       // 不进队列：对账在跑时也要立刻显示
       this.hooks.onTyping(ev.conversation_id, ev.from, (ev.expires_in ?? 6) * 1000)
+      return
+    }
+    if (FRIEND_EVENTS.includes(ev.event)) {
+      this.hooks.onFriendPush(ev) // 与会话无关，不排进会话队列
       return
     }
     void this.enqueue(() => this.push(ev))

@@ -27,7 +27,7 @@ beforeEach(() => {
   server = []
   const api = new ImApi('https://im.test', new TokenManager(async () => token('t')), p)
   sync = new Sync(api, store, 'u1', {
-    onNewMessage: m => news.push(m.content.text), onMessageUpdated: m => updated.push(m), onChanged() {}, onError() {}, onTyping() {},
+    onNewMessage: m => news.push(m.content.text), onMessageUpdated: m => updated.push(m), onChanged() {}, onError() {}, onTyping() {}, onFriendPush() {},
   })
   const empty = () => ok({ items: [], next_cursor: '', has_more: false })
   p.routes = {

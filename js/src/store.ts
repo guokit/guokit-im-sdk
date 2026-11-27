@@ -52,6 +52,18 @@ export class Store {
     return null
   }
 
+  /** 按对方回写会话的好友备注，返回是否有变化。 */
+  setPeerRemark(userId: string, remark: string): boolean {
+    let changed = false
+    for (const c of this.convs.values()) {
+      if (c.peer && c.peer.userId === userId && c.peer.remark !== remark) {
+        this.convs.set(c.id, patchConversation(c, { peer: { ...c.peer, remark } }))
+        changed = true
+      }
+    }
+    return changed
+  }
+
   /** 置顶在前（按置顶时间倒序），其余按最后消息时间倒序，再按 id 倒序。 */
   conversations(): ImConversation[] {
     return [...this.convs.values()].sort((a, b) =>

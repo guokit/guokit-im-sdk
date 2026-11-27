@@ -204,3 +204,32 @@ test('参数错误同步抛，服务端拒绝走 rejects', async () => {
   p.routes['POST /handoff'] = () => fail('VALIDATION', 400)
   await expect(im.handoffCs()).rejects.toMatchObject({ code: 'VALIDATION' })
 })
+
+test('好友：调过 friends() 才对账、回写会话备注；friend_changed 推送更新缓存与备注；旧服务端没有 /friends 不影响会话', async () => {
+  const friendsSeen: any[] = []
+  im.on('friendsChanged', v => friendsSeen.push(v))
+  let friendCalls = 0
+  p.routes['GET /friends'] = () => {
+    friendCalls++
+    return ok({ items: [{ user_id: 'u2', nickname: '乙', remark: '老乙', group_ids: [3], mutual: true, created_at: at }], next_cursor: '' })
+  }
+  await im.login('u1')
+  await flush()
+  expect(friendCalls).toBe(0) // 没调过 friends() 不拉
+  expect(im.friends()).toEqual([])
+  await flush()
+  expect(friendCalls).toBe(1)
+  expect(im.friend('u2')?.remark).toBe('老乙')
+  expect(im.conversations()[0].peer?.remark).toBe('老乙')
+  expect(friendsSeen.at(-1).map((f: any) => f.userId)).toEqual(['u2'])
+
+  rts[0].hooks.onPublication({ event: 'friend_changed', action: 'removed', friend: { user_id: 'u2' } })
+  await flush()
+  expect(im.friend('u2')).toBeNull()
+  expect(im.conversations()[0].peer?.remark).toBe('')
+
+  delete p.routes['GET /friends'] // 旧服务端：404
+  rts[0].hooks.onConnected()
+  await flush()
+  expect(im.conversations().length).toBe(1)
+})

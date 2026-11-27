@@ -1,6 +1,7 @@
 export { ImApiError, ImKickedOutError } from './errors.js'
 export { csServiceId, csUserId, messageCard, reportReasons } from './models.js'
 export type {
+  ImAddFriendResult, ImFriend, ImFriendAddPolicy, ImFriendGroup, ImFriendRequest, ImFriendRequestStatus,
   ImBlockItem, ImCard, ImReportReason, ImReportResult, ImConnectionState, ImConversation, ImCsState, ImCsStatus, ImFeatures, ImMessage,
   ImMessagePreview, ImMessageStatus, ImPeer, ImSendProgress, ImToken, ImTyping,
 } from './models.js'

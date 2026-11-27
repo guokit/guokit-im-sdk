@@ -1,9 +1,12 @@
 import { ImApi, type Raw } from './api.js'
 import { Emitter } from './emitter.js'
 import { isKickedOut } from './errors.js'
-import type {
-  ImBlockItem, ImConnectionState, ImConversation, ImCsState, ImFeatures, ImMessage, ImReportReason, ImReportResult,
-  ImSendProgress, ImToken, ImTyping,
+import { FriendBook } from './friends.js'
+import {
+  friendRequestFromServer,
+  type ImAddFriendResult, type ImBlockItem, type ImConnectionState, type ImConversation, type ImCsState, type ImFeatures,
+  type ImFriend, type ImFriendAddPolicy, type ImFriendGroup, type ImFriendRequest, type ImMessage, type ImReportReason,
+  type ImReportResult, type ImSendProgress, type ImToken, type ImTyping,
 } from './models.js'
 import { browserPlatform, isBrowser } from './platform/browser.js'
 import type { ImFile, ImPlatform, NetworkChange } from './platform/types.js'
@@ -35,6 +38,12 @@ export interface ImEvents {
   kickedOut: undefined
   typing: ImTyping
   sendProgress: ImSendProgress
+  /** 有人向我发了好友申请。 */
+  friendRequest: ImFriendRequest
+  /** 好友快照（按 userId 升序）：推送、本设备操作、对账后都会发。 */
+  friendsChanged: ImFriend[]
+  /** 分组有增删改，请重拉 friendGroups()。 */
+  friendGroupsChanged: undefined
 }
 
 /** 换令牌重连的上限，连上或主动 login 后清零：防止 provider 一直给坏令牌时死循环。 */
@@ -51,6 +60,7 @@ interface Session {
   api: ImApi
   sync: Sync
   sender: Sender
+  friends: FriendBook
   rt: Realtime | null
   rtToken: string | null
   kicked: boolean
@@ -137,6 +147,7 @@ export class GuokitIm {
     s.offs.forEach(f => f())
     s.typingTimers.forEach(t => clearTimeout(t))
     s.sync.close()
+    s.friends.close()
     s.api.close()
     s.tokens.clear()
     s.rt?.close()
@@ -173,6 +184,7 @@ export class GuokitIm {
       onChanged: () => this.snapshot(s),
       onError: e => isKickedOut(e) && this.kick(s),
       onTyping: (id, from, ttl) => this.showTyping(s, id, from, ttl),
+      onFriendPush: ev => this.onFriendPush(s, ev),
     })
     const sender = new Sender(api, store, sync, this.platform, me, {
       onUpdated: m => this.emit(s, 'messageUpdated', m),
@@ -181,8 +193,13 @@ export class GuokitIm {
       onProgress: p => this.emit(s, 'sendProgress', p),
       closed: () => this.s !== s,
     })
+    const friends = new FriendBook(api, store, {
+      onFriends: list => this.emit(s, 'friendsChanged', list),
+      onConversations: () => this.snapshot(s),
+      onError: () => this.kick(s),
+    })
     const s: Session = {
-      me, store, tokens, api, sync, sender, rt: null, rtToken: null, kicked: false, authRetries: 0,
+      me, store, tokens, api, sync, sender, friends, rt: null, rtToken: null, kicked: false, authRetries: 0,
       reportedRead: new Map(), typingTimers: new Map(), typingSent: new Map(), hiddenAt: null, offs: [],
     }
     this.s = s
@@ -357,6 +374,113 @@ export class GuokitIm {
   ): Promise<ImReportResult> {
     const s = this.session()
     return this.run(s, () => s.api.report(target, reason, opts.detail, opts.messageIds, opts.block))
+  }
+
+  // ---------------- 好友 ----------------
+  //
+  // 好友只缓存在内存：冷启动为空，调过 friends() 后每次连上全量重拉一次（最多 6 个请求）。
+
+  /** 先返回内存快照（按 userId 升序），同时在后台全量对账（结果走 friendsChanged 事件）。 */
+  friends(): ImFriend[] {
+    const s = this.session()
+    s.friends.used = true
+    void s.friends.reconcile()
+    return s.friends.snapshot()
+  }
+
+  /** 只查内存缓存。 */
+  friend(userId: string): ImFriend | null {
+    return this.session().friends.get(userId)
+  }
+
+  /** box：in 收到的（默认）、out 发出的；按最近更新时间倒序。待处理超过 30 天显示为 expired。 */
+  friendRequests(box: 'in' | 'out' = 'in', opts: { cursor?: string | null; limit?: number } = {}): Promise<{ items: ImFriendRequest[]; nextCursor: string | null }> {
+    const s = this.session()
+    return this.run(s, () => s.api.friendRequests(box, opts.cursor, opts.limit))
+  }
+
+  /**
+   * 加好友。friend：已经是或直接成为好友；pending：已发申请。
+   * 被对方拉黑 IM_BLOCKED、对方不允许加 IM_FRIEND_ADD_DENIED、每天 50 条超出 IM_RATE_LIMITED，都抛 ImApiError。
+   */
+  addFriend(target: string, message = ''): Promise<ImAddFriendResult> {
+    const s = this.session()
+    return this.run(s, async () => {
+      const r = await s.api.addFriend(target, message || undefined)
+      if (r.status === 'friend' && s.friends.used) void s.friends.reconcile() // 推送会到，这里兜底
+      return r
+    })
+  }
+
+  /** 同意申请，返回新好友。 */
+  acceptFriend(requestId: number): Promise<ImFriend> {
+    const s = this.session()
+    return this.run(s, async () => {
+      const f = await s.api.acceptFriend(requestId)
+      s.friends.apply('added', f)
+      return f
+    })
+  }
+
+  /** 拒绝申请，不通知对方。 */
+  async rejectFriend(requestId: number): Promise<void> {
+    const s = this.session()
+    await this.run(s, () => s.api.rejectFriend(requestId))
+  }
+
+  /** 删除好友，只删我这一侧（对方列表里我还在）。 */
+  async deleteFriend(target: string): Promise<void> {
+    const s = this.session()
+    await this.run(s, async () => {
+      await s.api.deleteFriend(target)
+      const f = s.friends.get(target)
+      s.friends.apply('removed', f ?? { userId: target, nickname: '', avatarUrl: '', remark: '', groupIds: [], mutual: false, createdAt: 0 })
+    })
+  }
+
+  /** 改备注与分组：不传不改，remark 传空串清空，groupIds 传空数组移出全部分组。 */
+  setFriend(target: string, patch: { remark?: string; groupIds?: number[] }): Promise<ImFriend> {
+    const s = this.session()
+    return this.run(s, async () => {
+      const f = await s.api.setFriend(target, { remark: patch.remark, group_ids: patch.groupIds })
+      s.friends.apply('updated', f)
+      return f
+    })
+  }
+
+  friendGroups(): Promise<ImFriendGroup[]> {
+    const s = this.session()
+    return this.run(s, () => s.api.friendGroups())
+  }
+
+  createFriendGroup(name: string): Promise<ImFriendGroup> {
+    const s = this.session()
+    return this.run(s, () => s.api.createFriendGroup(name))
+  }
+
+  updateFriendGroup(id: number, patch: { name?: string; sort?: number }): Promise<ImFriendGroup> {
+    const s = this.session()
+    return this.run(s, () => s.api.updateFriendGroup(id, patch))
+  }
+
+  /** 删分组，好友不删；好友项里残留的这个 id 下次对账时去掉。 */
+  async deleteFriendGroup(id: number): Promise<void> {
+    const s = this.session()
+    await this.run(s, () => s.api.deleteFriendGroup(id))
+    if (s.friends.used) void s.friends.reconcile()
+  }
+
+  async setFriendAddPolicy(policy: ImFriendAddPolicy): Promise<void> {
+    const s = this.session()
+    if (![0, 1, 2].includes(policy)) throw new RangeError('加好友方式只能是 0、1、2')
+    await this.run(s, () => s.api.setFriendAddPolicy(policy))
+  }
+
+  private onFriendPush(s: Session, ev: Record<string, any>): void {
+    if (this.s !== s) return
+    if (ev.event === 'friend_request' && ev.request) this.emit(s, 'friendRequest', friendRequestFromServer(ev.request))
+    else if (ev.event === 'friend_changed' && ev.friend) s.friends.apply(ev.action, ev.friend)
+    else if (ev.event === 'friend_groups_changed') this.emit(s, 'friendGroupsChanged', undefined)
   }
 
   // ---------------- 客服 ----------------
@@ -534,6 +658,7 @@ export class GuokitIm {
         s.authRetries = 0
         this.setState('connected')
         void s.sync.reconcile()
+        if (s.friends.used) void s.friends.reconcile()
       },
       onDisconnected: code => {
         if (!this.live(s)) return

@@ -170,7 +170,7 @@ export class Sender {
       this.hooks.onKickedOut()
     } else if (e instanceof ImApiError) {
       code = e.code
-      if (code === 'IM_BLOCKED' || code === 'IM_MESSAGE_REJECTED') status = 'rejected'
+      if (code === 'IM_BLOCKED' || code === 'IM_MESSAGE_REJECTED' || code === 'IM_NOT_FRIEND') status = 'rejected'
     } else if (e instanceof LocalFailure) code = e.code
     const errorMessage = String((e as Error)?.message ?? e)
     // 推送可能已先把它合并成 sent，存储不会降级，以存储结果为准

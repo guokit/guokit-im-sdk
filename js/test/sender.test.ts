@@ -22,7 +22,7 @@ beforeEach(() => {
   closed = false
   provider = () => token('t')
   api = new ImApi('https://im.test', new TokenManager(() => provider()), p)
-  sync = new Sync(api, store, 'u1', { onNewMessage() {}, onMessageUpdated() {}, onChanged() {}, onError() {}, onTyping() {} })
+  sync = new Sync(api, store, 'u1', { onNewMessage() {}, onMessageUpdated() {}, onChanged() {}, onError() {}, onTyping() {}, onFriendPush() {} })
   sender = new Sender(api, store, sync, p, 'u1', {
     onUpdated: m => updated.push(m), onSnapshot() {}, onKickedOut: () => kicked++, onProgress: x => progress.push(x), closed: () => closed,
   })

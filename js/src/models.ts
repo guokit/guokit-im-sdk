@@ -70,6 +70,8 @@ export interface ImPeer {
   userId: string
   nickname: string
   avatarUrl: string
+  /** 本人给他设的好友备注，不是好友或没设为空串；有就优先显示。旧服务端没有，恒为空串。 */
+  remark: string
 }
 
 export interface ImConversation {
@@ -104,6 +106,52 @@ export interface ImFeatures {
   /** 文件大小上限（MB），0 = 不能发。 */
   fileMaxMb: number
   videoMaxMb: number
+  /** 只允许好友互发：为 true 时给陌生人发消息会被拒（`IM_NOT_FRIEND`），聊天入口宜提示「加好友后才能聊天」。 */
+  friendOnly: boolean
+  /** 本人的加好友方式（不是站点开关，同在 /me 里）：0 需要验证、1 任何人直接加、2 不允许任何人加。 */
+  addPolicy: ImFriendAddPolicy
+}
+
+/** 加好友方式：0 需要验证、1 任何人直接加、2 不允许任何人加。 */
+export type ImFriendAddPolicy = 0 | 1 | 2
+
+/** 好友。一行 = 我把他当好友；mutual 为 false 表示对方已单向删了我。 */
+export interface ImFriend {
+  userId: string
+  nickname: string
+  avatarUrl: string
+  /** 备注，没设为空串 */
+  remark: string
+  /** 本人分组 id；可能残留已删分组的 id，按 friendGroups() 过滤 */
+  groupIds: number[]
+  mutual: boolean
+  createdAt: number
+}
+
+export type ImFriendRequestStatus = 'pending' | 'accepted' | 'rejected' | 'expired'
+
+/** 好友申请。userId 是对方：收到的是申请人，发出的是被申请人。 */
+export interface ImFriendRequest {
+  requestId: number
+  userId: string
+  nickname: string
+  avatarUrl: string
+  message: string
+  status: ImFriendRequestStatus
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ImFriendGroup {
+  id: number
+  name: string
+  sort: number
+}
+
+/** friend：已经是或直接成为好友；pending：已发申请，requestId 是申请 id。 */
+export interface ImAddFriendResult {
+  status: 'friend' | 'pending'
+  requestId: number | null
 }
 
 export interface ImSendProgress {
@@ -231,7 +279,7 @@ export function conversationFromServer(j: Json): ImConversation {
     id: j.conversation_id,
     type: j.type,
     peer: j.peer
-      ? { userId: j.peer.user_id, nickname: j.peer.nickname ?? '', avatarUrl: j.peer.avatar_url ?? '' }
+      ? { userId: j.peer.user_id, nickname: j.peer.nickname ?? '', avatarUrl: j.peer.avatar_url ?? '', remark: j.peer.remark ?? '' }
       : null,
     lastMessage: last
       ? { seq: last.seq, from: last.from, type: last.type, preview: last.preview, createdAt: parseCst(last.created_at) }
@@ -253,6 +301,33 @@ export function featuresFromServer(j: Json): ImFeatures {
     readReceipt: f.read_receipt ?? false,
     fileMaxMb: f.file_max_mb ?? 0,
     videoMaxMb: f.video_max_mb ?? 0,
+    friendOnly: f.friend_only ?? false,
+    addPolicy: ([0, 1, 2].includes(j.add_policy) ? j.add_policy : 0) as ImFriendAddPolicy,
+  }
+}
+
+export function friendFromServer(j: Json): ImFriend {
+  return {
+    userId: j.user_id,
+    nickname: j.nickname ?? '',
+    avatarUrl: j.avatar_url ?? '',
+    remark: j.remark ?? '',
+    groupIds: Array.isArray(j.group_ids) ? j.group_ids : [],
+    mutual: j.mutual ?? false,
+    createdAt: j.created_at ? parseCst(j.created_at) : 0,
+  }
+}
+
+export function friendRequestFromServer(j: Json): ImFriendRequest {
+  return {
+    requestId: j.request_id,
+    userId: j.user_id,
+    nickname: j.nickname ?? '',
+    avatarUrl: j.avatar_url ?? '',
+    message: j.message ?? '',
+    status: j.status,
+    createdAt: parseCst(j.created_at),
+    updatedAt: parseCst(j.updated_at),
   }
 }
 
