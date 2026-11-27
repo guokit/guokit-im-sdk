@@ -1,6 +1,6 @@
 {
   "name": "@guokit/im",
-  "version": "0.13.0",
+  "version": "0.15.0",
   "description": "guokit IM 客户端 SDK：浏览器、uni-app、微信小程序",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/guokit/guokit-im-sdk.git", "directory": "js" },

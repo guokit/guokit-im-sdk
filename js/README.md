@@ -19,7 +19,7 @@ guokit IM 的客户端 SDK，一套代码用在浏览器、uni-app（微信小�
 
 | 工程 | 用哪个 |
 |---|---|
-| npm / pnpm（Vite、webpack、uni-app CLI） | `npm i https://github.com/guokit/guokit-im-sdk/releases/download/v0.13.0/guokit-im-0.13.0.tgz`，然后 `import { GuokitIm } from '@guokit/im'` |
+| npm / pnpm（Vite、webpack、uni-app CLI） | `npm i https://github.com/guokit/guokit-im-sdk/releases/download/v0.15.0/guokit-im-0.15.0.tgz`，然后 `import { GuokitIm } from '@guokit/im'` |
 | HBuilderX、不用 npm 的 uni-app Vue3 | 把 `guokit-im.esm.js` 放进工程，`import { GuokitIm, uniPlatform } from '@/libs/guokit-im.esm.js'` |
 | 微信原生小程序、webpack 工程 | 把 `guokit-im.min.js` 放进工程，`const { GuokitIm, uniPlatform } = require('./guokit-im.min.js')` |
 | 浏览器 `<script>` | `guokit-im.min.js`，得到全局 `GuokitIm`（`new GuokitIm.GuokitIm({…})`） |

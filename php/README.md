@@ -12,7 +12,7 @@
     { "type": "vcs", "url": "https://github.com/guokit/guokit-im-sdk" }
   ],
   "require": {
-    "guokit/im": "^0.14"
+    "guokit/im": "^0.15"
   }
 }
 ```
