@@ -126,6 +126,44 @@ class Client
         ]);
     }
 
+    /**
+     * 建立双向好友，不看加好友方式与黑名单；双方须已导入、未注销且是普通用户。幂等。
+     * $remark 非空时设 $userId 一侧的备注。返回 $userId 一侧的好友项。
+     */
+    public function addFriend(string $userId, string $target, string $remark = ''): array
+    {
+        $opts = $remark === '' ? [] : ['json' => ['remark' => $remark]];
+        return $this->call('PUT', $this->friendPath($userId, $target), $opts);
+    }
+
+    /** 解除好友：默认只删 $userId 一侧，$both 为 true 时双向都删。幂等。 */
+    public function removeFriend(string $userId, string $target, bool $both = false): array
+    {
+        $opts = $both ? ['query' => ['both' => 'true']] : [];
+        return $this->call('DELETE', $this->friendPath($userId, $target), $opts);
+    }
+
+    /** @param array $pairs 1–100 对 [['user_id'=>…, 'friend_id'=>…]]，每对双向建立，任一不合法整批拒绝 */
+    public function importFriends(array $pairs): array
+    {
+        return $this->call('POST', '/friends/batch', ['json' => ['pairs' => array_values($pairs)]]);
+    }
+
+    /** 好友列表，按 user_id 升序翻页；返回 ['items'=>…, 'next_cursor'=>…]，next_cursor 为空串即没有下一页 */
+    public function friends(string $userId, string $cursor = '', int $limit = 200): array
+    {
+        $query = ['limit' => $limit];
+        if ($cursor !== '') {
+            $query['cursor'] = $cursor;
+        }
+        return $this->call('GET', '/users/' . rawurlencode($userId) . '/friends', ['query' => $query]);
+    }
+
+    private function friendPath(string $userId, string $target): string
+    {
+        return '/users/' . rawurlencode($userId) . '/friends/' . rawurlencode($target);
+    }
+
     /** 按「用户 + 对方」查会话设置；对方为 `@cs` 或 `@cs:<主体标识>` 即客服会话。查不到抛 VALIDATION（HTTP 404）。 */
     public function conversationSettings(string $userId, string $peerId): array
     {

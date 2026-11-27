@@ -37,6 +37,31 @@ class ClientTest extends TestCase
         $this->assertSame(['user_ids' => ['u1', 'u2']], json_decode((string) $req->getBody(), true));
     }
 
+    public function testFriends(): void
+    {
+        $im = $this->client(new Response(200, [], json_encode(['code' => 0, 'message' => 'ok', 'data' => ['user_id' => 'u2', 'remark' => '老李']])));
+        $this->assertSame('老李', $im->addFriend('u1', 'u2', '老李')['remark']);
+        $req = $this->history[0]['request'];
+        $this->assertSame('PUT', $req->getMethod());
+        $this->assertSame('/api/im/v1/server/users/u1/friends/u2', $req->getUri()->getPath());
+        $this->assertSame(['remark' => '老李'], json_decode((string) $req->getBody(), true));
+
+        $im = $this->client(new Response(200, [], json_encode(['code' => 0, 'message' => 'ok', 'data' => []])));
+        $im->removeFriend('u1', 'u2', true);
+        $req = $this->history[0]['request'];
+        $this->assertSame('DELETE', $req->getMethod());
+        $this->assertSame('both=true', $req->getUri()->getQuery());
+
+        $im = $this->client(new Response(200, [], json_encode(['code' => 'IM_USER_NOT_FOUND', 'message' => '用户不存在', 'data' => []])));
+        try {
+            $im->importFriends([['user_id' => 'u1', 'friend_id' => 'gone']]);
+            $this->fail('应抛 ImException');
+        } catch (ImException $e) {
+            $this->assertSame('IM_USER_NOT_FOUND', $e->getErrorCode());
+        }
+        $this->assertSame('/api/im/v1/server/friends/batch', $this->history[0]['request']->getUri()->getPath());
+    }
+
     public function testDeleteAndExportUser(): void
     {
         $empty = json_encode(['code' => 0, 'message' => 'ok', 'data' => new \stdClass()]);
