@@ -194,7 +194,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 欢迎语、排队提示、坐席回复都以 `@cs` 身份到达；接待状态 `GET /api/imcs/v1/state`，评价 `POST /api/imcs/v1/sessions/{id}/rating`（`{id}` 即评价卡片里的 `session_id`），见接入文档 §10。Flutter SDK 对应 `csState()` / `handoffCs()` / `rateCs(sessionId, rating, {comment})`。
 `status` 为 `queued`、`agents_online` 为 `false`、`leave_enabled` 为 `true` 时可以给「留联系方式」的表单，提交 `POST /api/imcs/v1/leave` `{contact_name, contact_phone, contact_email}`（电话与邮箱至少一项，内容不用填），返回 `ticket_no`，排队随之结束；每小时 5 次，`IM_RATE_LIMITED` 不要自动重试。两个字段旧服务端没有，缺省分别按 `true`、`false`。Flutter SDK 对应 `ImCsState.canLeave` 与 `leaveCs({name, phone, email})`（服务端 ≥ v1.13.0）。
 站点开了机器人时 `status` 多一个 `bot`，可放「转人工」按钮调 `POST /api/imcs/v1/handoff`；不认识的 `status` 按 `none` 处理。`@cs` 的消息带 `sender_role`：`agent` / `bot` / `system`，**`bot` 的内容由 AI 生成，界面要标识**（Flutter 用 `msg.isBot`）。
-网站只要客服窗口、不自己写聊天界面的，用站点自带的挂件：一行 `<script src="https://<IM 域名>/imcs-widget/loader.js" async></script>`，已登录用户传 `window.GuokitCSConfig.token`，见接入文档 §10.7。
+网站只要客服窗口、不自己写聊天界面的，用站点自带的挂件：一行 `<script src="https://<IM 域名>/imcs-widget/loader.js" async></script>`，已登录用户传 `window.CSWidgetConfig.token`，见接入文档 §10.7。
 
 站点里每家门店 / 商户各有客服的，把 `to` 换成 `@cs:<主体标识>`，会话列表里 `type` 同为 `service`，接待状态带 `?service_id=<主体标识>`，没有机器人与留言，见接入文档 §10.11。Flutter SDK 用 `csUserId(id)` 得到客服号、`conversation.serviceId` 取主体标识、`csState(serviceId: …)`。
 

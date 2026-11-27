@@ -425,7 +425,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 - 没开启、超过上限、类型不符 → 400 `VALIDATION`，`message` 可直接显示；上传过于频繁、当天的文件与视频数到上限 → `IM_RATE_LIMITED`（§9）。
 - **发之前先在本地按 `features` 判断大小**：请求体超过服务端上限时，服务端不收完就回错误并断开，弱网下客户端可能只看到网络错误。
 - 站点前面的反向代理要把请求体上限配到比文件、视频上限大 1MB 以上，否则代理直接回 413（不是 JSON 响应包）。
-- 上传慢，超时要放宽（SDK 为 5 分钟）。附件传好后 `attachment_id` 与 `ticket` 可以反复用，发消息失败重试时不要再传一次。
+- 上传慢，超时要放宽（建议 5 分钟）。附件传好后 `attachment_id` 与 `ticket` 可以反复用，发消息失败重试时不要再传一次。
 
 ### 5.7 黑名单
 
@@ -659,7 +659,9 @@ App 上架审核要求能举报其他用户（App Store 审核指南 1.2）。�
 - 协议：[Centrifuge](https://centrifugal.dev/) 客户端协议（JSON 与 Protobuf 均支持），请用官方 SDK：
   - Flutter：pub 包 `centrifuge`（<https://github.com/centrifugal/centrifuge-dart>），自动走 Protobuf 子协议，无需额外参数
   - Web：npm 包 `centrifuge`（<https://github.com/centrifugal/centrifuge-js>）
+<!-- brand:signed-begin -->
   - 小程序：没有官方 SDK，用 `@guokit/im`（§11）。Flutter、浏览器、uni-app、微信小程序都建议直接用 §11 的 SDK，本节的规则它们都已实现
+<!-- brand:signed-end -->
 - 鉴权：连接时把**用户令牌**作为 SDK 的 `token` 传入（不是 HTTP 头）。
 - **不需要、也不允许客户端订阅任何频道**。连上后服务端自动把你订阅到专属频道，所有推送从 SDK 的**服务端订阅 publication 事件**收（Dart：`client.publication`；JS：`centrifuge.on('publication', …)`）。调用 `newSubscription` 会被拒绝。
 - 长连接不接收任何业务命令，发消息、标已读都走 HTTP。
@@ -1145,10 +1147,10 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 
 ```html
 <script>
-  window.GuokitCSConfig = {
+  window.CSWidgetConfig = {
     token: "后端签的用户令牌",          // 没登录就不传
     onTokenExpired: async () => {        // 令牌过期时回调：换新的再交回来
-      GuokitCS.setToken(await fetchImTokenFromYourBackend())
+      CSWidget.setToken(await fetchImTokenFromYourBackend())
     },
     color: "#2563eb",                    // 可选，按钮颜色
   }
@@ -1160,10 +1162,14 @@ if (($d['to_source'] ?? 'app') === 'app' && !str_starts_with($d['to'], '@cs') &&
 
 | 方法 | 说明 |
 |---|---|
-| `GuokitCS.open()` / `GuokitCS.close()` | 打开 / 收起窗口，可绑到你自己的按钮上 |
-| `GuokitCS.setToken(token)` | 登录后传令牌；退出登录传空串，回到访客 |
+| `CSWidget.open()` / `CSWidget.close()` | 打开 / 收起窗口，可绑到你自己的按钮上 |
+| `CSWidget.setToken(token)` | 登录后传令牌；退出登录传空串，回到访客 |
 
-脚本是异步加载的，调用前先判断 `window.GuokitCS` 是否存在。窗口里机器人的消息标「AI 生成」。站点开启文件消息后，窗口里能发文件；视频只能看，不能发。
+脚本是异步加载的，调用前先判断 `window.CSWidget` 是否存在。窗口里机器人的消息标「AI 生成」。站点开启文件消息后，窗口里能发文件；视频只能看，不能发。
+
+<!-- brand:signed-begin -->
+**旧名仍兼容**：早期接入用的 `window.GuokitCSConfig` 与 `GuokitCS.open()` / `close()` / `setToken()` 照常可用（`GuokitCS` 与 `CSWidget` 是同一个对象），老访客的身份也会保留，不用改代码；新接入请用新名。
+<!-- brand:signed-end -->
 
 **站点部署要求**：反向代理要把 Host（含端口）原样传给 IM 服务，否则窗口里的长连接会被来源校验拒绝；要传真实客户端 IP（`X-Forwarded-For`，且反向代理与 IM 同机），否则所有访客会共用一个新建限额。
 
@@ -1291,7 +1297,7 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 <div id="desk" style="height:100vh"></div>
 <script src="https://im.example.com/imcs-widget/desk-loader.js"></script>
 <script>
-  const desk = GuokitDesk.mount("#desk", {
+  const desk = CSDesk.mount("#desk", {
     token: "你方后端签的坐席令牌",
     onTokenExpired: async () => desk.setToken(await fetchDeskTokenFromYourBackend()),
     onReady: () => {},                 // 工作台加载完，可以用了
@@ -1319,10 +1325,14 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 
 **在 App 里接待**（页面适配手机宽度）：用 WebView 打开 `https://im.example.com/imcs-desk#token=<坐席令牌>`（可再加 `&open=<接待 id>`），令牌放在 `#` 后面，不会发到服务器日志。
 
-- 页面给 App 的消息走名为 `GuokitDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `guokitdesk:ready`、`guokitdesk:loaded`（同 `onReady`）、`guokitdesk:error`（带 `code`、`message`）、`guokitdesk:token-expired`、`guokitdesk:unread`（带 `count`）、`guokitdesk:remind`（带 `title`、`body`、`kind`、`session_id`、`message_id`）。
-- App 调 `window.GuokitDesk` 上的 `setToken("…")`、`setVisible(bool)`、`open(id)`（返回 Promise）、`back()`（**同步返回** `true` / `false`，安卓返回键先调它，`false` 再退出页面）。
-- 收到 `guokitdesk:ready`（含页面重新加载）要给一次令牌。App 切到别的页面、WebView 还留着时 `setVisible(false)`，回来再传 `true`；页面重新加载后回到「显示」。
+- 页面给 App 的消息走名为 `CSDeskHost` 的 JavaScript 通道（`postMessage` 一个 JSON 字符串），`type` 为 `csdesk:ready`、`csdesk:loaded`（同 `onReady`）、`csdesk:error`（带 `code`、`message`）、`csdesk:token-expired`、`csdesk:unread`（带 `count`）、`csdesk:remind`（带 `title`、`body`、`kind`、`session_id`、`message_id`）。
+- App 调 `window.CSDesk` 上的 `setToken("…")`、`setVisible(bool)`、`open(id)`（返回 Promise）、`back()`（**同步返回** `true` / `false`，安卓返回键先调它，`false` 再退出页面）。
+- 收到 `csdesk:ready`（含页面重新加载）要给一次令牌。App 切到别的页面、WebView 还留着时 `setVisible(false)`，回来再传 `true`；页面重新加载后回到「显示」。
 - 发图片、文件要在 WebView 里放开文件选择；图片与文件是新窗口打开，交给系统浏览器。
+
+<!-- brand:signed-begin -->
+**旧名仍兼容**：早期接入的网页照常用 `GuokitDesk.mount`（与 `CSDesk` 是同一个对象）。已上线的 App 注入的是 `GuokitDeskHost` 通道、调的是 `window.GuokitDesk`，页面照旧经它发 `guokitdesk:` 前缀的消息，不用改；App 注入了 `CSDeskHost` 就只走它、只发 `csdesk:`，两个都注入也只走 `CSDeskHost`。新接入请用新名。
+<!-- brand:signed-end -->
 
 #### 员工不在线时的提醒
 
@@ -1361,6 +1371,7 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 
 `id` 递增；失败会重试、可能乱序，**同一 `session_id` 以 `id` 大的为准**。将来可能增加 `change`，不认识的忽略。
 
+<!-- brand:signed-begin -->
 ## 11. SDK、接口规范与 AI 接入
 
 公开仓库 <https://github.com/guokit/guokit-im-sdk> 提供 SDK、机器可读的接口规范与 AI 接入材料：
@@ -1373,6 +1384,7 @@ curl -X PUT https://im.example.com/api/imcs/v1/server/services/shop_1001 \
 - **OpenAPI 3.1 规范**：`spec/openapi.yaml`，覆盖本文的服务端与客户端接口，可直接导入 Postman、Apifox 等工具生成请求集合或代码。
 - **给 AI 编码助手的说明**：`llms.txt`（索引）与 `llms-full.txt`（完整内容），可喂给 AI 助手作为接入上下文。
 - **Agent Skill**：`skills/guokit-im`，Claude Code、Codex、Cursor 等可安装，装法见仓库 README。
+<!-- brand:signed-end -->
 
 ---
 
