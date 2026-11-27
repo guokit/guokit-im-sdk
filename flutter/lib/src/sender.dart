@@ -391,7 +391,9 @@ class ImSender {
       return _finish(msg, ImMessageStatus.failed, 'KICKED_OUT', e.message);
     } on ImApiException catch (e) {
       final rejected =
-          e.code == 'IM_BLOCKED' || e.code == 'IM_MESSAGE_REJECTED';
+          e.code == 'IM_BLOCKED' ||
+          e.code == 'IM_MESSAGE_REJECTED' ||
+          e.code == 'IM_NOT_FRIEND';
       return _finish(
         msg,
         rejected ? ImMessageStatus.rejected : ImMessageStatus.failed,

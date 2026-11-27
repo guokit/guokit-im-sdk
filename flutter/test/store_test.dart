@@ -135,6 +135,14 @@ void main() {
         expect(await s.syncedSeq(1), 7);
       });
 
+      test('会话 peer.remark 入库读回', () async {
+        final c = _conv(7, 'p7', maxSeq: 1);
+        await s.upsertConversations([
+          c.copyWith(peer: c.peer.copyWith(remark: '老七')),
+        ]);
+        expect((await s.conversationByPeer('p7'))?.peer.remark, '老七');
+      });
+
       test('置顶在前；免打扰不计总未读；changes 游标持久化', () async {
         ImConversation conv(int id, {int? pinned, bool muted = false}) =>
             _conv(id, 'p$id', maxSeq: 1).copyWith(
@@ -317,6 +325,7 @@ void main() {
     addTearDown(s.close);
     final c = (await s.listConversations()).single;
     expect((c.maxSeq, c.pinnedAt, c.muted, c.clearSeq), (5, null, false, 0));
+    expect(c.peer.remark, '');
     expect(await s.syncedSeq(1), 3);
     expect((await s.messages(1)).single.senderRole, null);
     await s.setChangesCursor('a');

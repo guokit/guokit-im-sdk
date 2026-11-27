@@ -23,6 +23,7 @@ CREATE TABLE conversations (
   peer_id TEXT NOT NULL,
   peer_nickname TEXT NOT NULL DEFAULT '',
   peer_avatar TEXT NOT NULL DEFAULT '',
+  peer_remark TEXT NOT NULL DEFAULT '',
   last_message TEXT,
   max_seq INTEGER NOT NULL DEFAULT 0,
   read_seq INTEGER NOT NULL DEFAULT 0,
@@ -80,6 +81,11 @@ const _upgradeV4 = [
   'ALTER TABLE conversations ADD COLUMN peer_read_seq INTEGER',
 ];
 
+/// v4 → v5（好友备注）。
+const _upgradeV5 = [
+  "ALTER TABLE conversations ADD COLUMN peer_remark TEXT NOT NULL DEFAULT ''",
+];
+
 /// 库文件名：userId 里 `[A-Za-z0-9_-]` 以外的字符换成 `_`。
 String sqliteFileName(String userId) =>
     'guokit_im_${userId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}.db';
@@ -123,7 +129,7 @@ class SqliteImStore implements ImStore {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         onCreate: (db, _) async {
           for (final sql in _schema) {
             await db.execute(sql);
@@ -142,6 +148,11 @@ class SqliteImStore implements ImStore {
           }
           if (from < 4) {
             for (final sql in _upgradeV4) {
+              await db.execute(sql);
+            }
+          }
+          if (from < 5) {
+            for (final sql in _upgradeV5) {
               await db.execute(sql);
             }
           }
@@ -173,6 +184,7 @@ class SqliteImStore implements ImStore {
     'peer_id': c.peer.userId,
     'peer_nickname': c.peer.nickname,
     'peer_avatar': c.peer.avatarUrl,
+    'peer_remark': c.peer.remark,
     'last_message': c.lastMessage == null
         ? null
         : jsonEncode(c.lastMessage!.toJson()),
@@ -195,6 +207,7 @@ class SqliteImStore implements ImStore {
         userId: r['peer_id'] as String,
         nickname: r['peer_nickname'] as String,
         avatarUrl: r['peer_avatar'] as String,
+        remark: (r['peer_remark'] as String?) ?? '',
       ),
       lastMessage: last == null
           ? null

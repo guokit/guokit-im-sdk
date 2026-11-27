@@ -102,6 +102,7 @@ void main() {
 
   var providerCalls = 0;
   Object? providerError;
+  var friendsServer = true;
 
   Future<void> settle() async {
     for (var i = 0; i < 3; i++) {
@@ -117,6 +118,7 @@ void main() {
     recalled = [];
     gate = null;
     providerCalls = 0;
+    friendsServer = true;
     providerError = null;
     // 本地：会话 1 拉过消息（syncedSeq = 2），会话 2 从没拉过。
     store = MemoryImStore();
@@ -153,7 +155,24 @@ void main() {
             r'/conversations/(\d+)/messages',
           ).firstMatch(req.url.path);
           Object data;
-          if (req.url.path.endsWith('/leave')) {
+          if (req.url.path.endsWith('/friends')) {
+            if (!friendsServer) {
+              return http.Response('not found', 404);
+            }
+            data = {
+              'items': [
+                {
+                  'user_id': 'u9',
+                  'nickname': '九',
+                  'remark': '老九',
+                  'group_ids': [3],
+                  'mutual': true,
+                  'created_at': '2026-11-27 10:00:00',
+                },
+              ],
+              'next_cursor': '',
+            };
+          } else if (req.url.path.endsWith('/leave')) {
             leaveBody = req.body;
             data = {'ticket_no': 'T1'};
           } else if (req.url.path.endsWith('/reports')) {
@@ -608,4 +627,36 @@ void main() {
       (4, ImConnectionState.connected),
     );
   });
+
+  test(
+    '好友：调过 friends() 才对账并回写会话备注；friend_changed 删除清掉备注；旧服务端没有 /friends 不影响会话',
+    () async {
+      final snaps = <List<ImFriend>>[];
+      im.onFriendsChanged.listen(snaps.add);
+      await im.login('u1');
+      await settle();
+      expect(requests.where((r) => r.contains('/friends')), isEmpty);
+      expect(im.friends(), isEmpty);
+      await settle();
+      expect(im.friend('u9')?.remark, '老九');
+      expect((await im.conversations()).first.peer.remark, '老九');
+      expect(snaps.last.map((f) => f.userId), ['u9']);
+
+      rt.emit(
+        ImRealtimePublication({
+          'event': 'friend_changed',
+          'action': 'removed',
+          'friend': {'user_id': 'u9'},
+        }),
+      );
+      await settle();
+      expect(im.friend('u9'), isNull);
+      expect((await im.conversations()).first.peer.remark, '');
+
+      friendsServer = false;
+      rt.emit(const ImRealtimeConnected());
+      await settle();
+      expect(await im.conversations(), isNotEmpty);
+    },
+  );
 }

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'api.dart';
 import 'errors.dart';
+import 'friends.dart';
 import 'models.dart';
 import 'realtime.dart';
 import 'store.dart';
@@ -60,6 +61,7 @@ class _Session {
   final ImApi api;
   late final ImSync sync;
   late final ImSender sender;
+  late final FriendBook friends;
   ImRealtime? rt;
   StreamSubscription<ImRealtimeEvent>? rtSub;
   String? rtToken;
@@ -98,6 +100,9 @@ class GuokitIm {
   final _kickedOut = StreamController<void>.broadcast();
   final _typing = StreamController<ImTyping>.broadcast();
   final _sendProgress = StreamController<ImSendProgress>.broadcast();
+  final _friendRequest = StreamController<ImFriendRequest>.broadcast();
+  final _friendsChanged = StreamController<List<ImFriend>>.broadcast();
+  final _friendGroupsChanged = StreamController<void>.broadcast();
 
   _Session? _s;
   int _totalUnread = 0;
@@ -153,6 +158,15 @@ class GuokitIm {
   /// 图片、语音、文件、视频的上传进度（不含视频封面），只报正在传的；结果看 [onMessageUpdated]。
   /// 换令牌重传时从头计。Flutter Web 上会直接跳到 100%：浏览器里先读完整个请求体才发。
   Stream<ImSendProgress> get onSendProgress => _sendProgress.stream;
+
+  /// 有人向我发了好友申请。
+  Stream<ImFriendRequest> get onFriendRequest => _friendRequest.stream;
+
+  /// 好友快照（按 userId 升序）：推送、本设备操作、对账后都会发。
+  Stream<List<ImFriend>> get onFriendsChanged => _friendsChanged.stream;
+
+  /// 分组有增删改，请重拉 [friendGroups]。
+  Stream<void> get onFriendGroupsChanged => _friendGroupsChanged.stream;
 
   /// 同步队列排空时完成。
   @visibleForTesting
@@ -225,6 +239,16 @@ class GuokitIm {
         if (e is ImKickedOutException) _kick(s);
       },
       onTyping: (id, from, ttl) => _showTyping(s, id, from, ttl),
+      onFriendPush: (ev) => _onFriendPush(s, ev),
+    );
+    s.friends = FriendBook(
+      api: s.api,
+      store: s.store,
+      onFriends: (list) {
+        if (_live(s)) _friendsChanged.add(list);
+      },
+      onConversations: () => _emitSnapshot(s),
+      onKickedOut: () => _kick(s),
     );
     s.sender = ImSender(
       api: s.api,
@@ -264,6 +288,7 @@ class GuokitIm {
     _s = null;
     _closing = s.me;
     s.sync.close();
+    s.friends.close();
     s.api.invalidate();
     s.store.invalidate();
     s.tokens.clear();
@@ -320,6 +345,9 @@ class GuokitIm {
       _kickedOut,
       _typing,
       _sendProgress,
+      _friendRequest,
+      _friendsChanged,
+      _friendGroupsChanged,
     ]) {
       await c.close();
     }
@@ -544,6 +572,120 @@ class GuokitIm {
       block: block,
     ),
   );
+
+  // ---------------- 好友 ----------------
+  //
+  // 好友只缓存在内存：冷启动为空，调过 friends() 后每次连上全量重拉一次（最多 6 个请求）。
+
+  /// 先返回内存快照（按 userId 升序），同时在后台全量对账（结果经 [onFriendsChanged] 推出）。
+  List<ImFriend> friends() {
+    final s = _session();
+    s.friends.used = true;
+    unawaited(s.friends.reconcile());
+    return s.friends.snapshot();
+  }
+
+  /// 只查内存缓存。
+  ImFriend? friend(String userId) => _session().friends.get(userId);
+
+  /// [box]：`in` 收到的（默认）、`out` 发出的；按最近更新时间倒序。待处理超过 30 天为 expired。
+  Future<({List<ImFriendRequest> items, String? nextCursor})> friendRequests({
+    String box = 'in',
+    String? cursor,
+    int? limit,
+  }) => _call((s) => s.api.friendRequests(box, cursor: cursor, limit: limit));
+
+  /// 加好友。status 为 `friend`（已经是或直接成为好友）或 `pending`（已发申请）。
+  /// 被对方拉黑 IM_BLOCKED、对方不允许加 IM_FRIEND_ADD_DENIED、每天 50 条超出 IM_RATE_LIMITED，都抛 [ImApiException]。
+  Future<({String status, int? requestId})> addFriend(
+    String target, {
+    String? message,
+  }) => _call((s) async {
+    final r = await s.api.addFriend(target, message: message);
+    if (r.status == 'friend' && s.friends.used) {
+      unawaited(s.friends.reconcile()); // 推送会到，这里兜底
+    }
+    return r;
+  });
+
+  /// 同意申请，返回新好友。
+  Future<ImFriend> acceptFriend(int requestId) => _call((s) async {
+    final f = await s.api.acceptFriend(requestId);
+    await s.friends.apply('added', f);
+    return f;
+  });
+
+  /// 拒绝申请，不通知对方。
+  Future<void> rejectFriend(int requestId) =>
+      _call((s) => s.api.rejectFriend(requestId));
+
+  /// 删除好友，只删我这一侧（对方列表里我还在）。
+  Future<void> deleteFriend(String target) => _call((s) async {
+    await s.api.deleteFriend(target);
+    await s.friends.apply(
+      'removed',
+      s.friends.get(target) ?? ImFriend(userId: target),
+    );
+  });
+
+  /// 改备注与分组：不传不改，[remark] 传空串清空，[groupIds] 传空列表移出全部分组。
+  Future<ImFriend> setFriend(
+    String target, {
+    String? remark,
+    List<int>? groupIds,
+  }) => _call((s) async {
+    final f = await s.api.setFriend(target, remark: remark, groupIds: groupIds);
+    await s.friends.apply('updated', f);
+    return f;
+  });
+
+  Future<List<ImFriendGroup>> friendGroups() =>
+      _call((s) => s.api.friendGroups());
+
+  Future<ImFriendGroup> createFriendGroup(String name) =>
+      _call((s) => s.api.createFriendGroup(name));
+
+  Future<ImFriendGroup> updateFriendGroup(int id, {String? name, int? sort}) =>
+      _call((s) => s.api.updateFriendGroup(id, name: name, sort: sort));
+
+  /// 删分组，好友不删；好友项里残留的这个 id 下次对账时去掉。
+  Future<void> deleteFriendGroup(int id) => _call((s) async {
+    await s.api.deleteFriendGroup(id);
+    if (s.friends.used) unawaited(s.friends.reconcile());
+  });
+
+  /// 加好友方式：0 需要验证、1 任何人直接加、2 不允许任何人加。
+  Future<void> setFriendAddPolicy(int policy) {
+    if (policy < 0 || policy > 2) {
+      throw ArgumentError.value(policy, 'policy', '只能是 0、1、2');
+    }
+    return _call((s) => s.api.setFriendAddPolicy(policy));
+  }
+
+  void _onFriendPush(_Session s, Map<String, dynamic> ev) {
+    if (!_live(s)) return;
+    try {
+      switch (ev['event']) {
+        case 'friend_request':
+          final r = ev['request'];
+          if (r is Map) _friendRequest.add(ImFriendRequest.fromServer(r));
+        case 'friend_changed':
+          final f = ev['friend'];
+          if (f is Map) {
+            unawaited(
+              s.friends.apply(
+                ev['action'] as String? ?? '',
+                ImFriend.fromServer(f),
+              ),
+            );
+          }
+        case 'friend_groups_changed':
+          _friendGroupsChanged.add(null);
+      }
+    } catch (_) {
+      // 推送处理不能抛出去。
+    }
+  }
 
   // ---------------- 客服 ----------------
 
@@ -846,6 +988,7 @@ class GuokitIm {
           s.authRetries = 0;
           _setState(ImConnectionState.connected);
           unawaited(s.sync.reconcile());
+          if (s.friends.used) unawaited(s.friends.reconcile());
         case ImRealtimeDisconnected(:final code):
           if (code == 3503) {
             _kick(s);

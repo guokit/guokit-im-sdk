@@ -425,12 +425,14 @@ class ImPeer {
     required this.userId,
     required this.nickname,
     required this.avatarUrl,
+    this.remark = '',
   });
 
   factory ImPeer.fromServer(Map json) => ImPeer(
     userId: json['user_id'] as String,
     nickname: (json['nickname'] as String?) ?? '',
     avatarUrl: (json['avatar_url'] as String?) ?? '',
+    remark: (json['remark'] as String?) ?? '',
   );
 
   /// `fromJson` 与 `fromServer` 键名相同。
@@ -445,10 +447,21 @@ class ImPeer {
   /// 可能为空串。
   final String avatarUrl;
 
+  /// 本人给他设的好友备注，不是好友或没设为空串；有就优先显示。旧服务端恒为空串。
+  final String remark;
+
+  ImPeer copyWith({String? remark}) => ImPeer(
+    userId: userId,
+    nickname: nickname,
+    avatarUrl: avatarUrl,
+    remark: remark ?? this.remark,
+  );
+
   Map<String, dynamic> toJson() => {
     'user_id': userId,
     'nickname': nickname,
     'avatar_url': avatarUrl,
+    'remark': remark,
   };
 }
 
@@ -611,15 +624,20 @@ class ImFeatures {
     required this.readReceipt,
     this.fileMaxMb = 0,
     this.videoMaxMb = 0,
+    this.friendOnly = false,
+    this.addPolicy = 0,
   });
 
   factory ImFeatures.fromServer(Map json) {
     final f = _map(json['features']);
+    final policy = _intOrNull(json['add_policy']) ?? 0;
     return ImFeatures(
       recallMinutes: _intOrNull(f['recall_minutes']) ?? 0,
       readReceipt: (f['read_receipt'] as bool?) ?? false,
       fileMaxMb: _intOrNull(f['file_max_mb']) ?? 0,
       videoMaxMb: _intOrNull(f['video_max_mb']) ?? 0,
+      friendOnly: (f['friend_only'] as bool?) ?? false,
+      addPolicy: policy >= 0 && policy <= 2 ? policy : 0,
     );
   }
 
@@ -634,6 +652,108 @@ class ImFeatures {
 
   /// 当前用户能发的视频大小上限（MB），0 = 不能发，不要显示「视频」。
   final int videoMaxMb;
+
+  /// 只允许好友互发：为 true 时给陌生人发消息会被拒（`IM_NOT_FRIEND`），聊天入口宜提示「加好友后才能聊天」。
+  final bool friendOnly;
+
+  /// 本人的加好友方式（不是站点开关，同在 /me 里）：0 需要验证、1 任何人直接加、2 不允许任何人加。
+  final int addPolicy;
+}
+
+/// 好友（接入文档 §5.17）。一行 = 我把他当好友；[mutual] 为 false 表示对方已单向删了我。
+class ImFriend {
+  const ImFriend({
+    required this.userId,
+    this.nickname = '',
+    this.avatarUrl = '',
+    this.remark = '',
+    this.groupIds = const [],
+    this.mutual = false,
+    this.createdAt,
+  });
+
+  factory ImFriend.fromServer(Map json) => ImFriend(
+    userId: json['user_id'] as String,
+    nickname: (json['nickname'] as String?) ?? '',
+    avatarUrl: (json['avatar_url'] as String?) ?? '',
+    remark: (json['remark'] as String?) ?? '',
+    groupIds: [
+      for (final v in (json['group_ids'] as List?) ?? const []) _int(v),
+    ],
+    mutual: (json['mutual'] as bool?) ?? false,
+    createdAt: json['created_at'] == null
+        ? null
+        : parseCst(json['created_at'] as String),
+  );
+
+  final String userId;
+  final String nickname;
+  final String avatarUrl;
+
+  /// 备注，没设为空串。
+  final String remark;
+
+  /// 本人分组 id；可能残留已删分组的 id，按 `friendGroups()` 过滤。
+  final List<int> groupIds;
+  final bool mutual;
+
+  /// 成为好友的时间（UTC）。
+  final DateTime? createdAt;
+}
+
+/// 好友申请。[userId] 是对方：收到的是申请人，发出的是被申请人。
+class ImFriendRequest {
+  const ImFriendRequest({
+    required this.requestId,
+    required this.userId,
+    required this.nickname,
+    required this.avatarUrl,
+    required this.message,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  factory ImFriendRequest.fromServer(Map json) => ImFriendRequest(
+    requestId: _int(json['request_id']),
+    userId: json['user_id'] as String,
+    nickname: (json['nickname'] as String?) ?? '',
+    avatarUrl: (json['avatar_url'] as String?) ?? '',
+    message: (json['message'] as String?) ?? '',
+    status: json['status'] as String,
+    createdAt: parseCst(json['created_at'] as String),
+    updatedAt: parseCst(json['updated_at'] as String),
+  );
+
+  final int requestId;
+  final String userId;
+  final String nickname;
+  final String avatarUrl;
+  final String message;
+
+  /// `pending` / `accepted` / `rejected` / `expired`（待处理超过 30 天）。
+  final String status;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+}
+
+/// 好友分组。
+class ImFriendGroup {
+  const ImFriendGroup({
+    required this.id,
+    required this.name,
+    required this.sort,
+  });
+
+  factory ImFriendGroup.fromServer(Map json) => ImFriendGroup(
+    id: _int(json['id']),
+    name: json['name'] as String,
+    sort: _intOrNull(json['sort']) ?? 0,
+  );
+
+  final int id;
+  final String name;
+  final int sort;
 }
 
 /// 上传进度（`GuokitIm.onSendProgress`）。

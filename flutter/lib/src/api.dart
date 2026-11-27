@@ -290,6 +290,136 @@ class ImApi {
   Future<void> unblock(String target) =>
       _json('DELETE', '/blocks/${Uri.encodeComponent(target)}');
 
+  /// `GET /friends`：好友一页，按 user_id 升序；nextCursor 为 null 即没有下一页。
+  Future<({List<ImFriend> items, String? nextCursor})> friends({
+    String? cursor,
+    int? limit,
+  }) async {
+    final d = _asMap(
+      await _json(
+        'GET',
+        '/friends',
+        query: {
+          if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+          if (limit != null) 'limit': '$limit',
+        },
+      ),
+    );
+    final next = d['next_cursor'] as String?;
+    return (
+      items: [
+        for (final e in d['items'] as List) ImFriend.fromServer(e as Map),
+      ],
+      nextCursor: next == null || next.isEmpty ? null : next,
+    );
+  }
+
+  /// `POST /friends`：加好友。status 为 friend 或 pending。
+  Future<({String status, int? requestId})> addFriend(
+    String target, {
+    String? message,
+  }) async {
+    final d = _asMap(
+      await _json(
+        'POST',
+        '/friends',
+        body: {
+          'target': target,
+          if (message != null && message.isNotEmpty) 'message': message,
+        },
+      ),
+    );
+    return (
+      status: d['status'] as String,
+      requestId: (d['request_id'] as num?)?.toInt(),
+    );
+  }
+
+  Future<void> deleteFriend(String target) =>
+      _json('DELETE', '/friends/${Uri.encodeComponent(target)}');
+
+  Future<ImFriend> setFriend(
+    String target, {
+    String? remark,
+    List<int>? groupIds,
+  }) async => ImFriend.fromServer(
+    _asMap(
+      await _json(
+        'PUT',
+        '/friends/${Uri.encodeComponent(target)}',
+        body: {
+          if (remark != null) 'remark': remark,
+          if (groupIds != null) 'group_ids': groupIds,
+        },
+      ),
+    ),
+  );
+
+  Future<({List<ImFriendRequest> items, String? nextCursor})> friendRequests(
+    String box, {
+    String? cursor,
+    int? limit,
+  }) async {
+    final d = _asMap(
+      await _json(
+        'GET',
+        '/friend-requests',
+        query: {
+          'box': box,
+          if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+          if (limit != null) 'limit': '$limit',
+        },
+      ),
+    );
+    final next = d['next_cursor'] as String?;
+    return (
+      items: [
+        for (final e in d['items'] as List)
+          ImFriendRequest.fromServer(e as Map),
+      ],
+      nextCursor: next == null || next.isEmpty ? null : next,
+    );
+  }
+
+  Future<ImFriend> acceptFriend(int requestId) async => ImFriend.fromServer(
+    _asMap(await _json('POST', '/friend-requests/$requestId/accept')),
+  );
+
+  Future<void> rejectFriend(int requestId) =>
+      _json('POST', '/friend-requests/$requestId/reject');
+
+  Future<List<ImFriendGroup>> friendGroups() async {
+    final d = _asMap(await _json('GET', '/friend-groups'));
+    return [
+      for (final e in d['items'] as List) ImFriendGroup.fromServer(e as Map),
+    ];
+  }
+
+  Future<ImFriendGroup> createFriendGroup(String name) async =>
+      ImFriendGroup.fromServer(
+        _asMap(await _json('POST', '/friend-groups', body: {'name': name})),
+      );
+
+  Future<ImFriendGroup> updateFriendGroup(
+    int id, {
+    String? name,
+    int? sort,
+  }) async => ImFriendGroup.fromServer(
+    _asMap(
+      await _json(
+        'PUT',
+        '/friend-groups/$id',
+        body: {if (name != null) 'name': name, if (sort != null) 'sort': sort},
+      ),
+    ),
+  );
+
+  Future<void> deleteFriendGroup(int id) =>
+      _json('DELETE', '/friend-groups/$id');
+
+  Future<void> setFriendAddPolicy(int policy) =>
+      _json('PUT', '/me/friend-settings', body: {'add_policy': policy});
+
   /// `POST /reports`：举报用户。不传的可选项不发。
   Future<({int reportId, bool duplicated})> report(
     String target,

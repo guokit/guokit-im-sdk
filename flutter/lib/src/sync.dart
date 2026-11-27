@@ -22,6 +22,7 @@ class ImSync {
     required this.onChanged,
     required this.onError,
     required this.onTyping,
+    this.onFriendPush,
   });
 
   final ImApi api;
@@ -44,6 +45,15 @@ class ImSync {
 
   /// 收到「正在输入」。不进队列：对账在跑时也要立刻显示。
   final void Function(int conversationId, String from, Duration ttl) onTyping;
+
+  /// friend_request / friend_changed / friend_groups_changed，由门面交给好友缓存。与会话无关，不进队列。
+  final void Function(Map<String, dynamic> ev)? onFriendPush;
+
+  static const _friendEvents = {
+    'friend_request',
+    'friend_changed',
+    'friend_groups_changed',
+  };
 
   /// 补拉一页的条数（服务端上限 100）。
   static const int pullLimit = 100;
@@ -90,6 +100,10 @@ class ImSync {
           Duration(seconds: (ev['expires_in'] as num?)?.toInt() ?? 6),
         );
       }
+      return Future<void>.value();
+    }
+    if (_friendEvents.contains(ev['event'])) {
+      if (!_closed) onFriendPush?.call(ev);
       return Future<void>.value();
     }
     return _enqueue(() => _push(ev));
