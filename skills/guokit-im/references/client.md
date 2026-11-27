@@ -210,3 +210,15 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 - 「同时拉黑」勾选就传 `block: true`，效果同拉黑接口；拉黑后照常刷新黑名单
 - `duplicated: true` 时照样提示「已收到举报」，不要当失败；超频回 `IM_RATE_LIMITED`（每人每天 20 张），提示明天再试
 - 处置结果不会推给举报人，界面不要承诺「处理后通知你」
+
+## 9. 好友
+
+需要服务端 ≥ v1.24.0，接入文档 §5.17。怎么找到对方（搜手机号、扫码）是你方的事，IM 只认 user_id。
+
+- 加好友 `POST /api/im/v1/friends` `{target, message?}` → `{status: friend | pending, request_id?}`。`friend` 是已经是 / 直接成为好友（对方还留着我、对方设了任何人可加、对方也申请过我），不要再显示「等待验证」
+- 申请 `GET /friend-requests?box=in|out`，同意 `POST /friend-requests/{id}/accept`（返回好友项）、拒绝 `/reject`（不通知申请人）；待处理 30 天后是 `expired`
+- **删除是单向的**：`DELETE /friends/{target}` 只删我这一侧，对方那边我还在、他看到的 `mutual` 变 false；不要做成「删了双方都没了」
+- 备注、分组 `PUT /friends/{target}` `{remark?, group_ids?}`：不传不改，空串清空备注；会话列表 `peer.remark` 有值就优先显示
+- 好友没有增量接口：每次 connected 后（用到好友的才需要）全量翻 `/friends`（每页 500）整份覆盖，并按它回写会话的 `peer.remark`；`friend_changed` 推送只是加速。JS / Flutter SDK 的 `friends()` 已这样做，且只放内存
+- 站点开了「只允许好友互发」（`/me` 的 `features.friend_only`）时，给不互为好友的人发消息回 `IM_NOT_FRIEND`，按被拒收处理、提示先加好友；客服会话不受限
+- 每天新发申请 50 条（`IM_RATE_LIMITED`），对方设了不允许加回 `IM_FRIEND_ADD_DENIED`，被拉黑回 `IM_BLOCKED`

@@ -55,9 +55,9 @@ await im.sendText('u1002', '你好')
 
 ```
 接入方后端 ──X-Api-Key──▶ /api/im/v1/server/*   导入用户、签令牌、封禁、黑名单、代发
-客户端     ──Bearer────▶ /api/im/v1/*          发消息、会话、已读、上传、黑名单、举报
+客户端     ──Bearer────▶ /api/im/v1/*          发消息、会话、已读、上传、黑名单、举报、好友
 客户端     ◀─WebSocket── /api/im/v1/connect/websocket   只收推送（Centrifuge 协议）
-接入方后端 ◀─签名回调──  before_send（同步审核） / after_send（异步，离线推送） / message_recalled（异步，撤回） / resolve_user（同步，微信用户是哪个会员） / report（异步，用户举报，默认关）
+接入方后端 ◀─签名回调──  before_send（同步审核） / after_send（异步，离线推送） / message_recalled（异步，撤回） / resolve_user（同步，微信用户是哪个会员） / report（异步，用户举报，默认关） / friend_changed（异步，好友变化，默认关）
 ```
 
 1. **拿 Key**：IM 后台「IM → 接入应用」新建，复制 API Key（只显示一次），放服务端配置，**不要下发客户端**。

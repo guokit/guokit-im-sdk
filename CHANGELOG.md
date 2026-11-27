@@ -2,6 +2,17 @@
 
 三个 SDK（Flutter `guokit_im`、PHP `guokit/im`、JS `@guokit/im`）共用仓库版本号。
 
+## v0.15.0 — 2026-11-27
+
+联系人与好友，**需要服务端 ≥ v1.24.0**（接入文档 §4.12、§5.17、§8.9）。三端都有改动；JS 从 v0.13.0 直接到 v0.15.0，从 Release 取 `guokit-im-0.15.0.tgz`、`guokit-im.esm.js`、`guokit-im.min.js`。
+
+- **JS / Flutter**：新增 `friends()`、`friend(userId)`、`friendRequests`、`addFriend`、`acceptFriend` / `rejectFriend`、`deleteFriend`（单向）、`setFriend`（备注与分组）、`friendGroups` 与增删改、`setFriendAddPolicy`；事件 `friendRequest`、`friendsChanged`、`friendGroupsChanged`
+- **JS / Flutter**：好友只缓存在内存，冷启动为空；调过 `friends()` 之后每次连上全量重拉（最多 6 个请求），单独排队，旧服务端没有 `/friends` 不影响会话同步
+- **JS / Flutter**：会话 `peer` 新增 `remark`（好友备注），收到 `friend_changed` 与好友对账后按对方回写；`features()` 新增 `friendOnly`、`addPolicy`；`IM_NOT_FRIEND` 与 `IM_BLOCKED` 一样落成 `rejected`
+- **Flutter**：`ImPeer` 新增可选参数 `remark`（默认空串，不破坏现有调用）；SQLite 本地库升到 v5（`conversations` 加 `peer_remark` 列），升级自动完成。自己实现 `ImStore` 的不用改接口，要保留备注请把 `peer.remark` 一起存
+- **PHP**：新增 `addFriend($userId, $target, $remark = '')`、`removeFriend($userId, $target, $both = false)`、`importFriends($pairs)`、`friends($userId, $cursor = '', $limit = 200)`；回调事件新增 `friend_changed`
+- 接入文档、OpenAPI、Skill、`llms-full.txt` 同步
+
 ## v0.14.0 — 2026-11-26
 
 用户注销与个人数据导出，**需要服务端 ≥ v1.23.0**（接入文档 §4.11）。只有 PHP 有代码改动；JS 不重发，仍用 v0.13.0 的文件。

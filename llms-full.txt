@@ -59,15 +59,17 @@
 | 400 | `VALIDATION` | 参数不合法，`message` 说明原因 |
 | 401 | `IM_KEY_INVALID` | `X-Api-Key` 缺失、错误，或接入应用已停用 |
 | 401 | `IM_TOKEN_INVALID` | 用户令牌缺失、验签失败、已过期，或用户已被封禁 / 踢下线 → 找后端换新令牌 |
-| 200 | `IM_USER_NOT_FOUND` | 用户不存在或已注销（签令牌、封禁不存在的用户、解封、踢下线、发消息的收发方、导入已注销的 user_id、导出；举报的被举报人不存在或不是普通用户） |
+| 200 | `IM_USER_NOT_FOUND` | 用户不存在或已注销（签令牌、封禁不存在的用户、解封、踢下线、发消息的收发方、导入已注销的 user_id、导出；举报的被举报人、加好友的对方不存在或不是普通用户） |
 | 200 | `IM_USER_DISABLED` | 用户已封禁（签令牌、发消息的收发方） |
 | 200 | `IM_MESSAGE_REJECTED` | 消息被发送前回调拒绝，`message` 形如 `消息被拒绝：<原因>` |
-| 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），`message` 为「对方已将你拉黑」 |
+| 200 | `IM_BLOCKED` | 收件人已把发送者拉黑（发消息、代发），或对方拉黑了你时加好友（§5.17），`message` 为「对方已将你拉黑」 |
+| 200 | `IM_NOT_FRIEND` | 站点开了「只允许好友互发」且双方不互为好友（客户端发消息，§5.17）；代发不受限 |
+| 200 | `IM_FRIEND_ADD_DENIED` | 对方设置了不允许任何人加他为好友（§5.17） |
 | 200 | `IM_RECALL_NOT_ALLOWED` | 不能撤回：站点没开启撤回，或超过时限（§5.12），`message` 说明原因 |
 | 200 | `CS_SERVICE_NOT_FOUND` / `CS_AGENT_NOT_FOUND` / `CS_SERVICE_DISABLED` | 客服主体不存在 / 坐席不存在 / 主体已停用（§10.11 的服务端接口） |
-| 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息、举报超限（§9） |
+| 200 | `IM_RATE_LIMITED` | 超频：接入应用调用超限，或该用户发消息、举报、发好友申请超限（§9） |
 | 403 | `FORBIDDEN` | 客户端访问了自己不在其中（或不存在）的会话 |
-| 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10）。消息不存在：撤回时（§4.10、§5.12），不是本人发的也按不存在 |
+| 404 | `VALIDATION` | 会话不存在：服务端审计查询（§4.6）或会话设置（§4.9）查不到会话；置顶一个不在列表里（已删除）的会话（§5.10）。消息不存在：撤回时（§4.10、§5.12），不是本人发的也按不存在。好友、好友申请、好友分组不存在（§5.17） |
 | 403 | `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN` | IM 站点授权异常，联系 IM 服务提供方 |
 | 500 | `INTERNAL` | 服务端错误，可稍后重试 |
 
@@ -99,7 +101,7 @@
 | PATCH | `/users/{user_id}` | 封禁 / 解封 |
 | POST | `/users/{user_id}/kick` | 踢下线 |
 | DELETE | `/users/{user_id}` | 注销用户（不可恢复） |
-| GET | `/users/{user_id}/export` | 导出用户资料、会话、黑名单 |
+| GET | `/users/{user_id}/export` | 导出用户资料、会话、黑名单、好友 |
 | GET | `/users/{user_id}/export/messages` | 导出用户发出的消息 |
 | POST | `/messages` | 以某用户身份发消息 |
 | POST | `/messages/{id}/recall` | 撤回消息 |
@@ -107,6 +109,10 @@
 | PUT | `/users/{user_id}/blocks/{target}` | 拉黑 |
 | DELETE | `/users/{user_id}/blocks/{target}` | 解除拉黑 |
 | GET | `/users/{user_id}/blocks` | 黑名单列表 |
+| PUT | `/users/{user_id}/friends/{target}` | 建立好友（双向） |
+| DELETE | `/users/{user_id}/friends/{target}` | 解除好友 |
+| POST | `/friends/batch` | 批量建立好友 |
+| GET | `/users/{user_id}/friends` | 好友列表 |
 | POST | `/users/online` | 批量查询在线状态 |
 | GET | `/users/{user_id}/conversations/{peer_id}` | 查询某用户对某会话的设置 |
 | PUT | `/users/{user_id}/conversations/{peer_id}/settings` | 替用户置顶 / 免打扰 |
@@ -272,13 +278,28 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 用户在你方 App 里注销账号时（你方的冷静期走完后）调注销；用户要求查阅复制个人信息时调导出。**先导出、再注销**：注销后导出回 `IM_USER_NOT_FOUND`。
 
 - `DELETE /users/{user_id}`：注销，返回 `{}`，**立即执行、不可恢复**，幂等（已注销的再调也成功）
-  - 账号改为「已注销用户」、清头像、停用，全部令牌失效并断开长连接；删除他的黑名单；结束他在各客服主体进行中的接待（`cs_session` 的 `reason` 为 `account_deleted`）
+  - 账号改为「已注销用户」、清头像、停用，全部令牌失效并断开长连接；删除他的黑名单；删除他的好友、分组与他发出和收到的好友申请，他也从别人的好友列表里消失（不给对方推送、不发 `friend_changed` 回调）；结束他在各客服主体进行中的接待（`cs_session` 的 `reason` 为 `account_deleted`）
   - 他发过的消息**保留**在对方的聊天记录里，发送者显示「已注销用户」，按「IM 设置 → 消息保留天数」清理；对方会话里不再显示对方已读
   - 之后这个 user_id 的导入（单个回 `IM_USER_NOT_FOUND`，批量跳过、不改资料）、签令牌、解封、踢下线、发消息一律当不存在；**user_id 不能复用**，新用户请用新的 user_id
   - 访客与微信等渠道用户按不存在（同 §4.4 的 `PATCH`），要处理在 IM 后台操作
-- `GET /users/{user_id}/export`：`{user: {user_id, nickname, avatar_url, status, created_at}, conversations: [{conversation_id, type, peer_user_id, last_msg_at, pinned, muted, visible}], blocks: [{user_id, created_at}]}`。`conversations` 含他本人删除的会话（`visible` 为 false），不分页
+- `GET /users/{user_id}/export`：`{user: {user_id, nickname, avatar_url, status, created_at}, conversations: [{conversation_id, type, peer_user_id, last_msg_at, pinned, muted, visible}], blocks: [{user_id, created_at}], friends: [{user_id, remark, group_ids, source, created_at}], friend_groups: [{id, name, sort, created_at}], friend_requests: [{user_id, message, status, created_at, updated_at}]}`。`conversations` 含他本人删除的会话（`visible` 为 false），不分页；`friend_requests` 只含他发出的
 - `GET /users/{user_id}/export/messages?cursor=&limit=`：他**自己发出的**消息，按发送先后翻页，`limit` 默认、最大 100；返回 `{items, next_cursor}`，`next_cursor` 为空串即没有下一页。消息对象同 §5.3，撤回的给原文并带 `recalled_at`、`recalled_by`；图片等附件链接是临时地址，收到请转存
 - 别人发给他的消息、针对他的举报不在导出范围内（含他人的个人信息）
+
+### 4.12 好友
+
+接入方后端直接维护好友关系，用于存量迁移，或你方系统已有好友关系、要同步过来。规则与客户端好友的口径见 §5.17。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| PUT | `/users/{user_id}/friends/{target}` | 建立**双向**好友，可带 `{"remark": "…"}` 设 `{user_id}` 一侧的备注（不传或空串不改）；返回 `{user_id}` 一侧的好友项 |
+| DELETE | `/users/{user_id}/friends/{target}?both=` | 解除；默认只删 `{user_id}` 一侧，`both=true` 双向都删；返回 `{}` |
+| POST | `/friends/batch` | `{"pairs": [{"user_id": "u1", "friend_id": "u2"}]}`，1–100 对，每对双向建立；任一不合法整批拒绝；返回 `{count}` |
+| GET | `/users/{user_id}/friends?cursor=&limit=` | 好友列表，形态同 §5.17 |
+
+- 建立不看对方的加好友方式与黑名单；双方须已导入、未注销且是普通用户（不是访客或微信用户），否则回 `IM_USER_NOT_FOUND`——注销后你方的同步任务重建不了他的好友。
+- 幂等：已存在的方向原样保留（备注与分组不动），解除不存在的也返回成功。受每人 3000 好友上限（400 `VALIDATION`）。
+- 新建、删除的方向照常给本人推 `friend_changed`（§6），开了好友回调各发一条 `friend_changed`（`via` 为 `server`，§8.9）。
 
 ## 5. 客户端接口（App / Web 调用）
 
@@ -286,7 +307,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/me` | 当前用户 `{user_id, nickname, avatar_url, features}`，可用作令牌自检。`features` 是站点开关：`recall_minutes` 撤回时限（分钟，0 = 没开启）、`read_receipt` 是否显示对方已读、`file_max_mb` / `video_max_mb` **当前用户**能发的文件、视频大小上限（MB，0 = 不能发，不要显示入口） |
+| GET | `/me` | 当前用户 `{user_id, nickname, avatar_url, add_policy, features}`，可用作令牌自检。`add_policy` 是本人的加好友方式（§5.17）。`features` 是站点开关：`recall_minutes` 撤回时限（分钟，0 = 没开启）、`read_receipt` 是否显示对方已读、`file_max_mb` / `video_max_mb` **当前用户**能发的文件、视频大小上限（MB，0 = 不能发，不要显示入口）、`friend_only` 是否只允许好友互发（为 true 时给陌生人的聊天入口提示「加好友后才能聊天」） |
 | POST | `/messages` | 发消息 |
 | GET | `/conversations` | 会话列表（游标分页） |
 | GET | `/conversations/{id}/messages` | 补拉 / 翻历史 |
@@ -305,6 +326,13 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 | GET | `/recalls` | 撤回增量补齐 |
 | POST | `/conversations/{id}/typing` | 正在输入 |
 | POST | `/reports` | 举报用户 |
+| GET / POST | `/friends` | 好友列表 / 加好友 |
+| PUT / DELETE | `/friends/{target}` | 改备注与分组 / 删除好友（单向） |
+| GET | `/friend-requests` | 好友申请列表 |
+| POST | `/friend-requests/{id}/accept`、`/reject` | 同意 / 拒绝申请 |
+| GET / POST | `/friend-groups` | 分组列表 / 新建分组 |
+| PUT / DELETE | `/friend-groups/{id}` | 改分组 / 删分组 |
+| PUT | `/me/friend-settings` | 设置加好友方式 |
 
 ### 5.1 发消息 `POST /messages`
 
@@ -351,7 +379,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 ```json
 { "items": [ {
     "conversation_id": 12, "type": "c2c",
-    "peer": { "user_id": "u1002", "nickname": "李四", "avatar_url": "https://cdn.example.com/b.png" },
+    "peer": { "user_id": "u1002", "nickname": "李四", "avatar_url": "https://cdn.example.com/b.png", "remark": "老李" },
     "last_message": { "seq": 37, "from": "u1002", "type": "text", "preview": "晚上见", "created_at": "2026-11-20 10:00:00" },
     "unread": 3, "max_seq": 37, "read_seq": 34, "last_msg_at": "2026-11-20 10:00:00",
     "pinned": true, "pinned_at": "2026-11-19 09:30:00", "muted": false, "clear_seq": 0
@@ -361,6 +389,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 
 | 字段 | 说明 |
 |---|---|
+| peer.remark | 本人给对方设的好友备注（§5.17），不是好友或没设为空串；客服会话恒为空串。有备注时优先显示备注 |
 | pinned / pinned_at | 本人是否置顶、置顶时间；未置顶为 `false` / `null` |
 | muted | 本人是否免打扰。免打扰会话的 `unread` 照常计数，但不计入总未读（§5.5） |
 | clear_seq | 本人清空到的序号，拉消息只会返回比它大的 seq（§5.3）；没清空过为 `0` |
@@ -631,7 +660,7 @@ curl -X PUT https://im.example.com/api/im/v1/server/users/u1001/conversations/u1
 无请求体，返回 `{}`。不落库、不回调，只给对方在线设备推一条 `typing`（§6）。
 
 - 输入时**最多每 3 秒调一次**，停止输入不用通知。
-- 对方不在线、把你拉黑时同样返回成功。不是会话成员 → 403 `FORBIDDEN`；超频 → `IM_RATE_LIMITED`。这个接口失败都可以忽略。
+- 对方不在线、把你拉黑、站点开了「只允许好友互发」而你们不互为好友时同样返回成功（不推）。不是会话成员 → 403 `FORBIDDEN`；超频 → `IM_RATE_LIMITED`。这个接口失败都可以忽略。
 - 客服会话会告诉正在接待的坐席。网页访客与微信用户不能调（400）。
 
 ### 5.16 举报用户 `POST /reports`
@@ -652,6 +681,49 @@ App 上架审核要求能举报其他用户（App Store 审核指南 1.2）。�
 - 对同一个人已有待处理的举报时不新建，返回原单且 `duplicated` 为 `true`（`block` 照常生效），不占每日次数。
 - 每人每天最多新建 20 张，超出 → `IM_RATE_LIMITED`；被举报人不存在或不是普通用户 → `IM_USER_NOT_FOUND`；证据不符合要求 → 400 `VALIDATION`。网页访客与微信用户不能举报（400）。
 - 处置结果不通知举报人。
+
+### 5.17 好友
+
+好友关系存在 IM 里，**怎么找到对方（搜手机号、扫码）由你方 App 与后端做**，IM 只认 user_id。你方已有好友体系的，可以不用本节，或用 §4.12 同步过来。
+
+**语义**
+
+- **一行 = 我把他当好友**，互为好友 = 两边都有对方。**删除是单向的**（同微信）：我删了你，你那边我还在，好友项的 `mutual` 变成 `false`；我再加你时，因为你还留着我，直接成功、不用你验证。
+- 拉黑不会自动删好友；对方拉黑了你时，加他回 `IM_BLOCKED`。
+- 每人的**加好友方式** `add_policy`：`0` 需要验证（默认）、`1` 任何人直接加、`2` 不允许任何人加（加他回 `IM_FRIEND_ADD_DENIED`）。服务端建立不受它限制。
+- **只允许好友互发**：「IM 设置」里的站点开关，默认关。打开后普通用户之间要**互为好友**才能发消息，否则回 `IM_NOT_FRIEND`；「正在输入」静默不推。客服会话、网页访客与微信用户、接入方后端代发（§4.5）都不受限。App 要先支持好友再让运营方打开。
+
+**加好友** `POST /friends`，`{"target": "u1002", "message": "我是张三"}`（附言可空、≤50 字），返回 `{"status": "friend"}` 或 `{"status": "pending", "request_id": 31}`：
+
+- `friend`：已经是好友，或直接成为好友——对方还留着我、对方设了任何人可加、对方也给我发过还没处理的申请（双方直接成为好友，那条申请变成 `accepted`）
+- `pending`：写了申请，对方收到 `friend_request` 推送（§6）。对同一个人再发会覆盖附言、重新开始计 30 天
+- 申请自己 → 400；对方不存在、已注销或不是普通用户 → `IM_USER_NOT_FOUND`
+
+**处理申请**：`GET /friend-requests?box=in|out&cursor=&limit=` 列收到的（默认）或发出的申请，按最近更新时间倒序，`limit` 默认 50、最大 200；申请项：
+
+```json
+{ "request_id": 31, "user_id": "u1001", "nickname": "张三", "avatar_url": "", "message": "我是张三",
+  "status": "pending", "created_at": "2026-11-27 10:00:00", "updated_at": "2026-11-27 10:00:00" }
+```
+
+`user_id` 是对方（收到的是申请人，发出的是被申请人）；`status` 为 `pending` / `accepted` / `rejected` / `expired`，**待处理超过 30 天按过期**。
+`POST /friend-requests/{id}/accept` 同意，返回新好友项，双方各收到一条 `friend_changed` added；`/reject` 拒绝，返回 `{}`，**不通知申请人**，申请人可以再发。只有被申请人能处理、只能处理待处理的（已处理或过期回 400，不存在回 404）。
+
+**好友列表** `GET /friends?cursor=&limit=`，按 user_id 升序翻页，`limit` 默认 200、最大 500，返回 `{items, next_cursor}`（`next_cursor` 为空串即没有下一页）。好友项：
+
+```json
+{ "user_id": "u1002", "nickname": "李四", "avatar_url": "", "remark": "老李", "group_ids": [3],
+  "mutual": true, "created_at": "2026-11-27 10:00:00" }
+```
+
+**删除** `DELETE /friends/{target}`：只删我这一侧，幂等，返回 `{}`。
+**备注与分组** `PUT /friends/{target}`，`{"remark": "老李", "group_ids": [3]}`：字段不传不改，`remark` 传空串清空（≤32 字），`group_ids` 传空数组移出全部分组（只能用自己的分组）；返回更新后的好友项；不是好友回 404。
+**分组**：`GET /friend-groups` 返回 `{items: [{id, name, sort}]}`（按 `sort` 升序）；`POST /friend-groups` `{name}` 新建（1–20 字、不重名、最多 20 个）；`PUT /friend-groups/{id}` `{name?, sort?}`；`DELETE /friend-groups/{id}` 删除分组并从你的好友项里去掉它（好友不删）。
+**加好友方式** `PUT /me/friend-settings`，`{"add_policy": 1}`。
+
+**推送**（§6）：`friend_request` 推给被申请人；`friend_changed` 只推好友行的本人（加好友双方各一条，只补建一侧时只推补建人；删除只推删除人；改备注或分组推本人 `updated`）；`friend_groups_changed` 推本人，收到后重拉分组。用户注销清掉的好友不推，`/friends` 里自然没有了。
+
+网页访客与微信用户不能用好友：写接口回 400，列表返回空。
 
 ## 6. 长连接
 
@@ -676,6 +748,9 @@ App 上架审核要求能举报其他用户（App Store 审核指南 1.2）。�
 { "event": "message_recalled", "conversation_id": 12, "seq": 37, "message": { 撤回后的消息对象 } }
 { "event": "peer_read", "conversation_id": 12, "peer_read_seq": 37 }
 { "event": "typing", "conversation_id": 12, "from": "u1002", "expires_in": 6 }
+{ "event": "friend_request", "request": { 申请项 } }
+{ "event": "friend_changed", "action": "added", "friend": { 好友项 } }
+{ "event": "friend_groups_changed" }
 ```
 
 - `message` 同时推给收发双方的所有在线设备，发送者其他设备借此同步；发送设备自己也会收到，按 `message.id`（或 `client_msg_id`）与 HTTP 返回去重。
@@ -685,6 +760,7 @@ App 上架审核要求能举报其他用户（App Store 审核指南 1.2）。�
 - `message_recalled` 推给双方的所有在线设备（含发起设备），按 `message.id` 替换本地那条（§5.12）。本地没有这个会话时忽略，不要因此新建会话。离线时漏掉的用 §5.13 补齐。
 - `peer_read` 推给**对方**的所有在线设备，只进不退（§5.14）。
 - `typing` 表示 `from` 正在输入，`expires_in` 秒内没有新的、或收到了他的消息就不再显示（§5.15）；客服会话里 `from` 是那个客服的号（`@cs` 或 `@cs:<主体标识>`）。
+- `friend_request`、`friend_changed`、`friend_groups_changed` 见 §5.17。`friend_changed` 的 `action` 为 `added` / `removed` / `updated`，`removed` 时 `friend` 只保证 `user_id` 有效；收到后同时更新会话列表里该对方的 `peer.remark`（`removed` 置空串）。
 - 将来可能增加事件，不认识的忽略即可。
 
 **断开码**（SDK 的 disconnected 事件里的 `code`）：
@@ -801,6 +877,7 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
   3. 带上次保存的游标调 `/recalls`，翻到 `has_more` 为 `false`，替换本地已有的消息与会话预览（§5.13）。
   4. 对落后的会话按 `after_seq=<本地最大 seq>` 补拉（见上例）。本地从没拉过的会话，进入时拉最新一页即可，更早的用 `before_seq` 按需翻。清空过的会话，本地最大 seq 取 `max(本地消息的最大 seq, clear_seq)`，否则会反复补拉。
   5. 用列表里的 `unread` / `read_seq` 刷新角标，或调 `/unread` 取总数。
+  6. 用了好友（§5.17）的，重新翻一遍 `/friends`（3000 人、每页 500，最多 6 次请求）整份覆盖本地好友，并按它回写会话的 `peer.remark`；好友没有增量接口，漏掉的 `friend_changed` 靠这一步补齐。旧服务端没有 `/friends` 时这一步失败可忽略，不影响会话同步。
 - **跳号检测**：收到 `message` 推送时 `seq > 本地最大 seq + 1`，说明中间漏了，补拉缺的那段（本地最大 seq 同样不小于 `clear_seq`）。
 - **未读**：会话未读 = `max_seq − read_seq`，总未读 = 各**非免打扰**会话之和（与 `/unread` 同一口径）。清空与删除会把 `read_seq` 推到最新，所以不再计未读。自己发的消息会把自己的 `read_seq` 推到该条，所以不计入自己的未读。
 - **多端同步**：同一用户可多设备同时在线；发出的消息推到自己其他设备，标已读推 `read` 事件、一键清未读推 `read_all` 事件，置顶 / 免打扰 / 清空 / 删除推 `conversation_changed` 事件，各端会话列表与角标一起更新。离线设备漏掉的会话设置用 `/conversations/changes` 补齐（§5.11），漏掉的撤回用 `/recalls` 补齐（§5.13）。
@@ -808,14 +885,14 @@ Future<void> pullConvChanges(ImStore store, ImApi api) async {
 
 ## 8. 回调
 
-在「IM 设置」配置：回调地址（http/https，建议 https）、回调密钥（≤128 字符，**务必设置**）、是否开启发送前回调、发送前回调失败策略（放行 / 拒绝，默认放行）、是否推送用户上下线（默认关闭，见 §8.4）、是否识别微信用户（默认关闭，见 §8.6）、是否推送用户举报（默认关闭，见 §8.8）。
+在「IM 设置」配置：回调地址（http/https，建议 https）、回调密钥（≤128 字符，**务必设置**）、是否开启发送前回调、发送前回调失败策略（放行 / 拒绝，默认放行）、是否推送用户上下线（默认关闭，见 §8.4）、是否识别微信用户（默认关闭，见 §8.6）、是否推送用户举报（默认关闭，见 §8.8）、是否推送好友变化（默认关闭，见 §8.9）。
 
 所有回调都是 `POST`，`Content-Type: application/json`，请求头：
 
 | 头 | 说明 |
 |---|---|
-| `X-Im-Event` | `before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` / `cs_session` / `report` |
-| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / message_recalled / user_state / cs_session / report）的每次重试**保持不变**，用于去重 |
+| `X-Im-Event` | `before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` / `cs_session` / `report` / `friend_changed` |
+| `X-Im-Delivery-Id` | 32 位十六进制投递 id；同一条异步回调任务（after_send / message_recalled / user_state / cs_session / report / friend_changed）的每次重试**保持不变**，用于去重 |
 | `X-Im-Timestamp` | 发出时刻的 Unix 秒 |
 | `X-Im-Signature` | `hex(HMAC-SHA256(回调密钥, 时间戳 + "\n" + 原始请求体))` |
 
@@ -987,6 +1064,11 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 - `evidence` 是提交时的快照，`content` 形状同消息内容（§5.1）；图片、语音、文件、视频的链接是投递时签发的临时地址，**收到请立即转存**，过期后打不开。
 - 处置（如封禁）用服务端接口 §4.4 自己做；IM 后台的举报单状态不会因此改变，两边各自记录。
 
+### 8.9 friend_changed（异步）
+
+- 时机：「IM 设置」打开「推送好友变化」且配了回调地址。好友关系新建或删除一个方向就投递一条（双向建立推两条），规则同 after_send；改备注、分组不推；用户注销时清掉的好友不推。
+- `data`：`{ "action": "added", "user_id": "u1001", "friend_id": "u1002", "via": "request" }`——`user_id` 把 `friend_id` 加为（或删出）好友；`action` 为 `added` / `removed`；`via` 为 `request`（用户在 App 里操作）或 `server`（接入方后端调 §4.12）。你方调 §4.12 产生的变化也会推回来，按 `via` 忽略即可。
+
 ## 9. 限制与配额
 
 | 项 | 上限 |
@@ -995,6 +1077,8 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 用户发消息 | 每个发送者 10 秒内 20 条（客户端发与服务端代发合并计），超出回 `IM_RATE_LIMITED`；幂等重放不计 |
 | 撤回、正在输入 | 各自每个用户 10 秒内 20 次，超出回 `IM_RATE_LIMITED` |
 | 举报 | 每人每天新建 20 张（返回原单不计），超出回 `IM_RATE_LIMITED`；证据最多 10 条，说明 ≤500 字 |
+| 好友 | 每人最多 3000 个好友、20 个分组；每天新发好友申请 50 条（直接成为好友的不计），超出回 `IM_RATE_LIMITED`；附言 ≤50 字、备注 ≤32 字、分组名 ≤20 字；待处理申请 30 天过期 |
+| 好友列表 / 好友申请列表 | 每页默认 200、最大 500 / 默认 50、最大 200；服务端批量建立每批 1–100 对 |
 | 撤回时限 | 站点配置，0–1440 分钟，0 = 没开启（默认）；服务端接口撤回不限时 |
 | 上传 | 每个用户 10 秒内 20 次；文件与视频另限每人每天 100 个（上传失败的也计）。超出回 `IM_RATE_LIMITED` |
 | 文件、视频消息 | 默认关闭；站点分别配置大小上限，1–100MB，0 = 不开启 |
@@ -1009,7 +1093,7 @@ Laravel 中用 `$request->getContent()` 取原始请求体、`$request->header(.
 | 令牌有效期 | 默认 168 小时，可配 1–8760 小时 |
 | before_send | 超时 2 秒，不重试 |
 | resolve_user | 超时 3 秒，不重试；同一微信用户 10 分钟内只问一次 |
-| after_send / message_recalled / user_state / cs_session / report | 写入即投递，另有每分钟一轮兜底（每轮最多 100 条）；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
+| after_send / message_recalled / user_state / cs_session / report / friend_changed | 写入即投递，另有每分钟一轮兜底（每轮最多 100 条）；单次超时 5 秒；共 3 次（间隔约 1、5 分钟） |
 | 查询在线状态 | 每次 1–100 个 user_id |
 | 下线判定 | 连接全部断开 30 秒后仍未重连才算下线并推 user_state |
 | Origin 白名单 | 最多 20 个 |
@@ -1406,7 +1490,7 @@ info:
     - 全部接口还受站点授权校验：授权异常时回 HTTP 403 + `LICENSE_INVALID` / `LICENSE_EXPIRED` / `LICENSE_DOMAIN`。
 
     长连接（WebSocket，Centrifuge 协议）不在本规范内，地址、鉴权、断开码见接入文档 §6；
-    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`、`PushConversationChanged`、`PushMessageRecalled`、`PushPeerRead`、`PushTyping`。
+    经长连接下发的推送事件写成了 schema：`PushMessage`、`PushRead`、`PushReadAll`、`PushConversationChanged`、`PushMessageRecalled`、`PushPeerRead`、`PushTyping`、`PushFriendRequest`、`PushFriendChanged`、`PushFriendGroupsChanged`。
     将来可能增加推送事件与消息类型，不认识的忽略或兜底显示。
 servers:
   - url: https://im.example.com
@@ -1820,6 +1904,137 @@ paths:
         '403': { $ref: '#/components/responses/LicenseError' }
         '500': { $ref: '#/components/responses/Internal' }
 
+  /api/im/v1/server/users/{user_id}/friends:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      tags: [服务端]
+      operationId: serverListFriends
+      summary: 好友列表
+      description: '`{user_id}` 把谁当好友，形态同客户端好友列表。只校验格式，不要求已导入。'
+      security: [{ ApiKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/FriendCursor'
+        - $ref: '#/components/parameters/FriendLimit'
+      responses:
+        '200':
+          description: 成功返回本页；调用超频时为 `IM_RATE_LIMITED`。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/FriendPage' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/users/{user_id}/friends/{target}:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      - $ref: '#/components/parameters/TargetPath'
+    put:
+      tags: [服务端]
+      operationId: serverAddFriend
+      summary: 建立好友（双向）
+      description: |
+        直接让 `{user_id}` 与 `{target}` 互为好友，不看加好友方式与黑名单。双方须已导入、未注销且是普通用户，否则回 `IM_USER_NOT_FOUND`
+        （注销后同步任务重建不了）。受每人 3000 好友上限（400 `VALIDATION`）。幂等：已存在的方向保留备注与分组。
+        可带 `remark` 设 `{user_id}` 一侧的备注（不传或空串不改）。新建的方向各推一条 `friend_changed` added，开了回调各发一条 `friend_changed`（`via: server`）。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                remark: { type: string, maxLength: 32 }
+      responses:
+        '200':
+          description: 成功返回 `{user_id}` 一侧的好友项；或 `IM_USER_NOT_FOUND` / `IM_RATE_LIMITED`（HTTP 200，code 非 0）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/FriendItem' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [服务端]
+      operationId: serverRemoveFriend
+      summary: 解除好友
+      description: 默认只删 `{user_id}` 一侧；`?both=true` 双向都删。幂等。删掉的方向给本人推 `friend_changed` removed，开了回调各发一条。
+      security: [{ ApiKey: [] }]
+      parameters:
+        - name: both
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { $ref: '#/components/responses/OkEmptyOrRateLimited' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/server/friends/batch:
+    post:
+      tags: [服务端]
+      operationId: serverImportFriends
+      summary: 批量建立好友（双向）
+      description: 1–100 对，每对双向建立，规则同单个建立；任一不合法整批拒绝，一个事务写入。用于存量迁移或与自家系统同步。
+      security: [{ ApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairs]
+              properties:
+                pairs:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [user_id, friend_id]
+                    properties:
+                      user_id: { type: string }
+                      friend_id: { type: string }
+      responses:
+        '200':
+          description: 成功返回 `{count}`；或 `IM_USER_NOT_FOUND` / `IM_RATE_LIMITED`（HTTP 200，code 非 0）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data:
+                            type: object
+                            properties:
+                              count: { type: integer }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/KeyInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /api/im/v1/server/users/{user_id}/conversations/{peer_id}:
     parameters:
       - $ref: '#/components/parameters/UserIdPath'
@@ -1918,6 +2133,7 @@ paths:
             成功返回消息对象（幂等重放时返回第一次的那条）。业务失败（HTTP 200）：
             `IM_USER_NOT_FOUND`（收发方不存在，或涉及客服）、`IM_USER_DISABLED`、`IM_BLOCKED`（收件人已拉黑 from）、
             `IM_RATE_LIMITED`（接入应用或发送者超频）、`IM_MESSAGE_REJECTED`（被发送前回调拒绝）。
+            服务端代发不受「只允许好友互发」限制，不会回 `IM_NOT_FRIEND`。
           content:
             application/json:
               schema:
@@ -2039,7 +2255,8 @@ paths:
         '200':
           description: |
             成功返回消息对象。业务失败（HTTP 200）：`IM_USER_NOT_FOUND`（接收方不存在）、`IM_USER_DISABLED`、
-            `IM_BLOCKED`（接收方已把你拉黑）、`IM_RATE_LIMITED`（10 秒 20 条）、`IM_MESSAGE_REJECTED`（被发送前回调拒绝）。
+            `IM_BLOCKED`（接收方已把你拉黑）、`IM_RATE_LIMITED`（10 秒 20 条）、`IM_MESSAGE_REJECTED`（被发送前回调拒绝）、
+            `IM_NOT_FRIEND`（站点开了「只允许好友互发」且双方不互为好友；客服会话不受限）。
           content:
             application/json:
               schema:
@@ -2586,6 +2803,330 @@ paths:
                         properties:
                           data: { $ref: '#/components/schemas/ReportResult' }
                   - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friends:
+    get:
+      tags: [客户端]
+      operationId: listFriends
+      summary: 我的好友列表
+      description: |
+        令牌用户把谁当好友（单向：对方删了我，我这边还在，`mutual` 变 false）。按 `user_id` 升序翻页，`next_cursor` 为空表示没有下一页。
+        访客返回空列表。
+      security: [{ UserToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/FriendCursor'
+        - $ref: '#/components/parameters/FriendLimit'
+      responses:
+        '200':
+          description: 成功返回本页。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FriendPage' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    post:
+      tags: [客户端]
+      operationId: addFriend
+      summary: 加好友（发申请）
+      description: |
+        返回 `status`：`friend` 表示已经是或直接成为好友（对方还留着我、对方设了「任何人可加」、对方也申请过我），`pending` 表示已发申请、等对方处理。
+        对方拉黑了我回 `IM_BLOCKED`，对方设了「不允许加我」回 `IM_FRIEND_ADD_DENIED`，对方不存在、已注销或不是普通用户回 `IM_USER_NOT_FOUND`（都是 HTTP 200）。
+        每人每天新发申请最多 50 条（只有写申请才计数），超出回 `IM_RATE_LIMITED`。申请自己、附言超过 50 字、好友已满 3000 回 400 `VALIDATION`。访客不能用。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddFriendRequest' }
+      responses:
+        '200':
+          description: 成功；或 `IM_BLOCKED` / `IM_FRIEND_ADD_DENIED` / `IM_USER_NOT_FOUND` / `IM_RATE_LIMITED`（HTTP 200，code 非 0）。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/OkEnvelope'
+                      - type: object
+                        properties:
+                          data: { $ref: '#/components/schemas/AddFriendResult' }
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friends/{target}:
+    parameters:
+      - $ref: '#/components/parameters/TargetPath'
+    delete:
+      tags: [客户端]
+      operationId: deleteFriend
+      summary: 删除好友（单向）
+      description: 只删我这一侧，对方列表里还有我（同微信）。幂等。只给本人推 `friend_changed` removed。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmpty' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+    put:
+      tags: [客户端]
+      operationId: setFriend
+      summary: 改好友备注与分组
+      description: |
+        `remark` 不传不改、传空串清空，最多 32 字；`group_ids` 不传不改、传空数组移出全部分组，只能用本人的分组。
+        只给本人推 `friend_changed` updated。不是好友回 404。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetFriendRequest' }
+      responses:
+        '200':
+          description: 成功返回更新后的好友项。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FriendItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friend-requests:
+    get:
+      tags: [客户端]
+      operationId: listFriendRequests
+      summary: 好友申请列表
+      description: |
+        `box=in` 收到的（默认）、`box=out` 发出的，按最近更新时间倒序。待处理超过 30 天的显示为 `expired`。访客返回空列表。
+      security: [{ UserToken: [] }]
+      parameters:
+        - name: box
+          in: query
+          schema: { type: string, enum: [in, out], default: in }
+        - $ref: '#/components/parameters/FriendCursor'
+        - name: limit
+          in: query
+          description: 每页条数，默认 50，最大 200
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        '200':
+          description: 成功返回本页。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FriendRequestPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friend-requests/{id}/accept:
+    parameters:
+      - $ref: '#/components/parameters/FriendRequestIdPath'
+    post:
+      tags: [客户端]
+      operationId: acceptFriendRequest
+      summary: 同意好友申请
+      description: 只有被申请人能处理、只能处理待处理的（已处理或已过期回 400）。双方成为好友，各推一条 `friend_changed` added。申请不存在回 404。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功返回新好友项。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FriendItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friend-requests/{id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/FriendRequestIdPath'
+    post:
+      tags: [客户端]
+      operationId: rejectFriendRequest
+      summary: 拒绝好友申请
+      description: 不通知申请人；申请人可以再次申请。只能处理待处理的，申请不存在回 404。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmpty' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friend-groups:
+    get:
+      tags: [客户端]
+      operationId: listFriendGroups
+      summary: 我的好友分组
+      description: 按 `sort`、`id` 升序。访客返回空列表。
+      security: [{ UserToken: [] }]
+      responses:
+        '200':
+          description: 成功。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/FriendGroup' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+    post:
+      tags: [客户端]
+      operationId: createFriendGroup
+      summary: 新建好友分组
+      description: 分组名 1–20 字、本人内不重名；每人最多 20 个。推本人 `friend_groups_changed`。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 20 }
+      responses:
+        '200':
+          description: 成功返回新分组。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FriendGroup' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/friend-groups/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: 分组 id
+        schema: { type: integer, format: int64 }
+    put:
+      tags: [客户端]
+      operationId: updateFriendGroup
+      summary: 改分组名或排序
+      description: 不传的字段不改。推本人 `friend_groups_changed`。分组不存在回 404。
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 20 }
+                sort: { type: integer, description: 小的在前 }
+      responses:
+        '200':
+          description: 成功返回更新后的分组。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FriendGroup' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [客户端]
+      operationId: deleteFriendGroup
+      summary: 删除好友分组
+      description: 同时从本人全部好友的 `group_ids` 里去掉它（好友不删）。推本人 `friend_groups_changed`。分组不存在回 404。
+      security: [{ UserToken: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/OkEmpty' }
+        '401': { $ref: '#/components/responses/TokenInvalid' }
+        '403': { $ref: '#/components/responses/LicenseError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /api/im/v1/me/friend-settings:
+    put:
+      tags: [客户端]
+      operationId: setFriendSettings
+      summary: 设置加好友方式
+      description: '`add_policy`：0 需要验证（默认）、1 任何人直接加、2 不允许任何人加。服务端建立好友不受它限制。'
+      security: [{ UserToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [add_policy]
+              properties:
+                add_policy: { type: integer, enum: [0, 1, 2] }
+      responses:
+        '200':
+          description: 成功返回设置后的值。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/OkEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          add_policy: { type: integer, enum: [0, 1, 2] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/TokenInvalid' }
         '403': { $ref: '#/components/responses/LicenseError' }
@@ -3267,7 +3808,7 @@ components:
       name: target
       in: path
       required: true
-      description: 被拉黑方 user_id，限 `[A-Za-z0-9_-]{1,64}`（所以客服号不合法）
+      description: 对方 user_id（被拉黑方、好友），限 `[A-Za-z0-9_-]{1,64}`（所以客服号不合法）
       schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
     PeerIdPath:
       name: peer_id
@@ -3318,6 +3859,22 @@ components:
       description: 默认 50，最大 200（超出按 200）
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
 
+    FriendCursor:
+      name: cursor
+      in: query
+      description: 上一页返回的 `next_cursor`，第一页不传
+      schema: { type: string }
+    FriendLimit:
+      name: limit
+      in: query
+      description: 每页条数，默认 200，最大 500
+      schema: { type: integer, minimum: 1, maximum: 500 }
+    FriendRequestIdPath:
+      name: id
+      in: path
+      required: true
+      description: 好友申请 id（`request_id`）
+      schema: { type: integer, format: int64 }
   responses:
     OkConversationSettings:
       description: 成功返回该会话在本人这一侧的设置。
@@ -3401,7 +3958,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     NotFound:
-      description: '`VALIDATION`：会话不存在（HTTP 404）。'
+      description: '`VALIDATION`：会话、消息、好友、好友申请或好友分组不存在（HTTP 404）。'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -3490,10 +4047,10 @@ components:
       type: string
       description: |
         失败响应的业务码（字符串）。HTTP 状态与业务码的对应：
-        - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）、消息不存在（撤回）
+        - `VALIDATION`：400 参数不合法；404 会话不存在（服务端审计查询）、消息不存在（撤回）、好友 / 好友申请 / 好友分组不存在
         - `IM_KEY_INVALID`：401
         - `IM_TOKEN_INVALID`：401
-        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`、`CS_SERVICE_NOT_FOUND`、`CS_SERVICE_DISABLED`、`CS_AGENT_NOT_FOUND`：200
+        - `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`IM_MESSAGE_REJECTED`、`IM_RATE_LIMITED`、`IM_BLOCKED`、`IM_RECALL_NOT_ALLOWED`、`IM_NOT_FRIEND`、`IM_FRIEND_ADD_DENIED`、`CS_SERVICE_NOT_FOUND`、`CS_SERVICE_DISABLED`、`CS_AGENT_NOT_FOUND`：200
         - `FORBIDDEN`：403 不是会话成员
         - `LICENSE_INVALID`、`LICENSE_EXPIRED`、`LICENSE_DOMAIN`：403 站点授权异常
         - `INTERNAL`：500
@@ -3507,6 +4064,8 @@ components:
         - IM_RATE_LIMITED
         - IM_BLOCKED
         - IM_RECALL_NOT_ALLOWED
+        - IM_NOT_FRIEND
+        - IM_FRIEND_ADD_DENIED
         - CS_SERVICE_NOT_FOUND
         - CS_SERVICE_DISABLED
         - CS_AGENT_NOT_FOUND
@@ -3556,6 +4115,7 @@ components:
         - type: object
           required: [features]
           properties:
+            add_policy: { type: integer, enum: [0, 1, 2], description: 本人的加好友方式：0 需要验证、1 任何人直接加、2 不允许任何人加；v1.24.0 之前的服务端没有 }
             features:
               type: object
               description: 站点在「IM 设置」里的开关；旧版服务端没有这个字段
@@ -3589,9 +4149,95 @@ components:
           items: { $ref: '#/components/schemas/BlockItem' }
         has_more: { type: boolean, description: 是否还有下一页 }
 
+    FriendItem:
+      type: object
+      required: [user_id, nickname, avatar_url, remark, group_ids, mutual, created_at]
+      properties:
+        user_id: { type: string, description: 好友 user_id }
+        nickname: { type: string }
+        avatar_url: { type: string }
+        remark: { type: string, description: 本人给他的备注名，没设为空串 }
+        group_ids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: 本人分组 id，未分组为空数组
+        mutual: { type: boolean, description: 对方是否也把我当好友（对方单向删了我时为 false） }
+        created_at: { $ref: '#/components/schemas/DateTime' }
+
+    FriendPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FriendItem' }
+        next_cursor: { type: string, description: 下一页游标，空串表示没有下一页 }
+
+    AddFriendRequest:
+      type: object
+      required: [target]
+      properties:
+        target: { type: string, description: 对方 user_id }
+        message: { type: string, maxLength: 50, description: 附言，可空 }
+
+    AddFriendResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [friend, pending], description: friend 已经是或直接成为好友；pending 已发申请 }
+        request_id: { type: integer, format: int64, description: 只在 pending 时返回 }
+
+    FriendRequestItem:
+      type: object
+      required: [request_id, user_id, nickname, avatar_url, message, status, created_at, updated_at]
+      properties:
+        request_id: { type: integer, format: int64 }
+        user_id: { type: string, description: 对方 user_id（收到的是申请人，发出的是被申请人） }
+        nickname: { type: string }
+        avatar_url: { type: string }
+        message: { type: string, description: 附言 }
+        status: { type: string, enum: [pending, accepted, rejected, expired] }
+        created_at: { $ref: '#/components/schemas/DateTime' }
+        updated_at: { $ref: '#/components/schemas/DateTime' }
+
+    FriendRequestPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FriendRequestItem' }
+        next_cursor: { type: string, description: 下一页游标，空串表示没有下一页 }
+
+    SetFriendRequest:
+      type: object
+      properties:
+        remark: { type: string, maxLength: 32, description: 不传不改，空串清空 }
+        group_ids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: 不传不改，空数组移出全部分组
+
+    FriendGroup:
+      type: object
+      required: [id, name, sort]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        sort: { type: integer }
+
+    ConversationPeer:
+      description: 会话对方。`remark` 是本人给他的好友备注，不是好友或没设为空串；客服会话恒为空串。
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          required: [remark]
+          properties:
+            remark: { type: string }
+
     UserExport:
       type: object
-      required: [user, conversations, blocks]
+      required: [user, conversations, blocks, friends, friend_groups, friend_requests]
       properties:
         user:
           type: object
@@ -3616,6 +4262,37 @@ components:
         blocks:
           type: array
           items: { $ref: '#/components/schemas/BlockItem' }
+        friends:
+          type: array
+          description: 他的好友（含备注与分组）
+          items:
+            type: object
+            properties:
+              user_id: { type: string }
+              remark: { type: string }
+              group_ids: { type: array, items: { type: integer, format: int64 } }
+              source: { type: string, enum: [request, server] }
+              created_at: { type: string }
+        friend_groups:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer, format: int64 }
+              name: { type: string }
+              sort: { type: integer }
+              created_at: { type: string }
+        friend_requests:
+          type: array
+          description: 他发出的好友申请
+          items:
+            type: object
+            properties:
+              user_id: { type: string, description: 被申请人 }
+              message: { type: string }
+              status: { type: string, enum: [pending, accepted, rejected, expired] }
+              created_at: { type: string }
+              updated_at: { type: string }
 
     ReportRequest:
       type: object
@@ -3926,7 +4603,7 @@ components:
           type: string
           enum: [c2c, service]
           description: c2c 普通单聊；service 平台客服会话
-        peer: { $ref: '#/components/schemas/User' }
+        peer: { $ref: '#/components/schemas/ConversationPeer' }
         last_message:
           description: 最后一条消息摘要，请判空：本人清空过记录（最后一条 seq 不超过 clear_seq）时为 null，极少数情况下也可能为 null
           oneOf:
@@ -3978,6 +4655,32 @@ components:
         conversation: { $ref: '#/components/schemas/ConversationSettings' }
 
     # ---- 长连接推送事件 ----
+    PushFriendRequest:
+      type: object
+      description: '**经长连接下发**。有人向我发了好友申请（写成 pending 时），推给被申请人。'
+      required: [event, request]
+      properties:
+        event: { type: string, const: friend_request }
+        request: { $ref: '#/components/schemas/FriendRequestItem' }
+
+    PushFriendChanged:
+      type: object
+      description: |
+        **经长连接下发**。只推给好友行的本人：加好友时双方各推 added（只补建一侧时只推补建人）；删除只推删除人；改备注或分组推本人 updated。
+        removed 时 `friend` 只保证 `user_id` 有效。用户注销清掉的好友不推。
+      required: [event, action, friend]
+      properties:
+        event: { type: string, const: friend_changed }
+        action: { type: string, enum: [added, removed, updated] }
+        friend: { $ref: '#/components/schemas/FriendItem' }
+
+    PushFriendGroupsChanged:
+      type: object
+      description: '**经长连接下发**。本人分组增删改后推本人，客户端重拉分组；删分组后好友项里可能残留它的 id，重拉好友或按现有分组过滤。'
+      required: [event]
+      properties:
+        event: { type: string, const: friend_groups_changed }
+
     PushMessage:
       type: object
       description: |

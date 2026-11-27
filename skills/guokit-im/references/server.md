@@ -138,6 +138,7 @@ String imCall(String method, String path, String jsonBody) throws Exception {
 | 每家门店 / 商户一个客服 | `PUT /api/imcs/v1/server/services/{sid}` `{"name"}` 建主体，`PUT …/services/{sid}/agents/{external_id}` `{"nickname"}` 加员工，首次用 `POST …/services/batch` 批量导入；用户给 `@cs:<sid>` 发消息。员工打开工作台前 `POST …/agents/{external_id}/token` 签坐席令牌（**先自己确认他有权限**），页面嵌 `/imcs-widget/desk-loader.js`，App 里 WebView 打开 `/imcs-desk#token=…`。员工不在线靠 after_send 的 `service_id`、`agents_online`、`agent_external_id`、`agent_online` 推手机。员工名单对账用 `PUT …/services/{sid}/agents` 整份替换、`GET …/agents`、`GET …/services`，没人回的用 `GET …/sessions` 查，接待变化可收 `cs_session` 回调；坐席的回复走 before_send（`from` 为 `@cs:<sid>`），要放行或审核。见接入文档 §10.11（服务端 ≥ v1.21.0） |
 | 用户注销账号 | 你方冷静期走完后，**先导出再注销**：`GET /users/{user_id}/export`（资料、会话、黑名单）+ `GET /users/{user_id}/export/messages?cursor=` 翻页取他发的消息（附件链接临时，收到即转存），再 `DELETE /users/{user_id}`。立即执行、不可恢复、幂等；他发的消息保留在对方记录里、发送者显示「已注销用户」；之后该 user_id 导入、签令牌、发消息都回 `IM_USER_NOT_FOUND`，**不能复用**。见接入文档 §4.11（服务端 ≥ v1.23.0） |
 | 收用户举报 | IM 设置打开「推送用户举报」后收异步回调 `report` `{report_id, reporter, target, reason, detail, conversation_id, evidence, created_at}`；同一举报人对同一人有待处理单时不再推。`evidence` 里图片等链接是临时地址，收到即转存。处置（如封号）自己调 `PATCH /users/{user_id}`，IM 后台的举报单状态不会跟着变。见接入文档 §8.8 |
+| 同步好友关系 | 你方已有好友体系、或从别家迁过来：`PUT /users/{user_id}/friends/{target}`（双向建立，可带 `{"remark"}` 设 user_id 一侧备注）、`POST /friends/batch` `{"pairs":[{"user_id","friend_id"}]}`（1–100 对，任一不合法整批拒绝）、`DELETE /users/{user_id}/friends/{target}?both=true`（默认只删 user_id 一侧）、`GET /users/{user_id}/friends`。不看加好友方式与黑名单；双方须已导入、未注销（注销后重建不了），每人 3000 上限。用户在 App 里加删好友时，打开「推送好友变化」收异步回调 `friend_changed` `{action: added|removed, user_id, friend_id, via: request|server}`，一个方向一条，你自己调接口产生的 `via` 是 `server`。见接入文档 §4.12、§8.9（服务端 ≥ v1.24.0） |
 | 代发订单 / 商品卡片 | `POST /messages`，`type: custom`，在 `content.data.im_card` 里带标准卡片外壳（title 必填；fields 放订单号、状态等发送时快照；web_link / app_link / mp_path 分别给网页、App、小程序），客服工作台按它画卡片，见接入文档 §5.9 |
 
 黑名单以接入方为准时：在自家拉黑事务提交后调 IM；IM 调用失败就记一条待重试任务，不要回滚自家拉黑。
@@ -208,4 +209,4 @@ boolean verifyIM(String ts, String sig, byte[] rawBody, String secret) throws Ex
 }
 ```
 
-响应：before_send 回 `{"code":0,"data":{"allow":true}}` 或 `{"code":0,"data":{"allow":false,"reason":"…"}}`；after_send、message_recalled、user_state、cs_session、report 回 `{"code":0}`；resolve_user 回 `{"code":0,"data":{"user_id":"…"}}`，不认识为空串。
+响应：before_send 回 `{"code":0,"data":{"allow":true}}` 或 `{"code":0,"data":{"allow":false,"reason":"…"}}`；after_send、message_recalled、user_state、cs_session、report、friend_changed 回 `{"code":0}`；resolve_user 回 `{"code":0,"data":{"user_id":"…"}}`，不认识为空串。

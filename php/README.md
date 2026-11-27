@@ -51,6 +51,8 @@ try {
 | `exportUser($userId)` / `exportMessages($userId, $cursor = null, $limit = 100)` | 导出资料、会话、黑名单 / 他发出的消息（翻页，`next_cursor` 为空串即完）；**先导出再注销**（需服务端 ≥ v1.23.0） |
 | `block($userId, $target)` / `unblock($userId, $target)` | 拉黑 / 解除（`$userId` 拒收 `$target` 的消息） |
 | `blocks($userId, $offset = 0, $limit = 50)` | 黑名单列表，返回 `items` 与 `has_more` |
+| `addFriend($userId, $target, $remark = '')` / `removeFriend($userId, $target, bool $both = false)` | 建立双向好友（不看加好友方式与黑名单，双方须已导入且未注销，`$remark` 设 `$userId` 一侧备注）/ 解除，默认只删 `$userId` 一侧。需服务端 ≥ v1.24.0，下同 |
+| `importFriends(array $pairs)` / `friends($userId, $cursor = '', $limit = 200)` | 批量建立 1–100 对 `[['user_id'=>…, 'friend_id'=>…]]`，任一不合法整批拒绝 / 好友列表（`items` 与 `next_cursor`） |
 | `conversationSettings($userId, $peerId)` | 按「用户 + 对方」查会话设置（对方 `@cs` 或 `@cs:<主体标识>` 即客服会话）；查不到抛 `VALIDATION`（HTTP 404） |
 | `setConversationSettings($userId, $peerId, array $settings)` | 置顶 / 免打扰：`['pinned'=>bool, 'muted'=>bool]`，至少一个 |
 | `clearConversation($userId, $peerId)` | 清空该用户这一侧的聊天记录 |
@@ -73,7 +75,7 @@ try {
 
 必须用**原始请求体**验签，不要先 `json_decode` 再编码。时间戳须为数字且与当前相差不超过 300 秒（第 5 个参数可改）。
 
-`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` / `cs_session` / `report`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
+`Callback::verify` 通过后返回 `CallbackEvent`：`$event->name`（`before_send` / `after_send` / `message_recalled` / `user_state` / `resolve_user` / `cs_session` / `report` / `friend_changed`，不认识的事件也请回 `Callback::ack()`）与 `$event->data`（数组）。去重用的 `X-Im-Delivery-Id` 请自行从请求头取。
 
 响应体用 `Callback::allow()`、`Callback::reject('原因')`、`Callback::ack()` 生成（均返回 JSON 字符串）。
 

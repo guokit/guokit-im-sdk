@@ -47,6 +47,8 @@ im.on('messageUpdated', m => { /* 发送中 → 终态、换了附件链接、�
 im.on('conversations', list => { /* 会话列表快照，置顶在前 */ })
 im.on('totalUnread', n => {})
 im.on('kickedOut', () => im.logout())
+im.on('friendRequest', r => { /* 有人加我，r.userId 是申请人 */ })
+im.on('friendsChanged', list => { /* 好友快照，按 userId 升序 */ })
 
 await im.login('u1001')
 
@@ -80,6 +82,20 @@ await im.sendVideo(to, file, { durationMs, width, height, cover })        // H.2
 
 `csUserId()` 是平台客服号、`csUserId('店铺标识')` 是客服主体，当对方 id 发消息即可。会话 `type === 'service'`，`serviceId` 是主体标识（平台客服为空串）。接待状态 `im.csState({ serviceId })`（不推送，进入会话与收到客服消息时各刷一次）、转人工 `im.handoffCs()`、评价 `im.rateCs(sessionId, 5)`、没人在时留联系方式 `im.leaveCs({ phone })`。`m.isBot` 的内容由 AI 生成，**界面上要标识**。
 
+### 好友
+
+需要服务端 ≥ v1.24.0（接入文档 §5.17）。好友只缓存在内存：`im.friends()` 同步返回快照（冷启动为空）并在后台全量拉一遍，调过之后每次连上都重拉（3000 人最多 6 个请求）；变化走 `friendsChanged`。
+
+```ts
+const r = await im.addFriend('u1002', '我是张三')     // { status: 'friend' | 'pending', requestId }
+const { items } = await im.friendRequests('in')        // 收到的申请；'out' 是发出的
+await im.acceptFriend(items[0].requestId)              // 或 rejectFriend（不通知对方）
+await im.setFriend('u1002', { remark: '老李', groupIds: [3] })
+await im.deleteFriend('u1002')                         // 单向：对方那边我还在，他的 mutual 变 false
+```
+
+另有 `friend(userId)`（只查缓存）、`friendGroups` `createFriendGroup` `updateFriendGroup` `deleteFriendGroup`（变化走 `friendGroupsChanged`，收到后重拉）、`setFriendAddPolicy(0 | 1 | 2)`。会话的 `peer.remark` 是好友备注，有就优先显示。`features()` 的 `friendOnly` 为 true 时站点只允许好友互发，给陌生人发会是 `rejected` + `IM_NOT_FRIEND`，`addPolicy` 是本人的加好友方式。
+
 ### 其他方法
 
 `pendingTo` `markAllRead` `setPinned` `setMuted` `clearConversation` `deleteConversation` `recall` `sendTyping` `features` `block` `unblock` `blocks` `report` `sendLocation` `sendCustom` `foreground` `logout` `dispose`；工具 `messageCard(m)`（业务卡片）、`csServiceId(userId)`；常量 `reportReasons`（举报原因编码）。完整签名看类型声明。
@@ -101,7 +117,7 @@ await im.sendVideo(to, file, { durationMs, width, height, cover })        // H.2
 
 ## 限制
 
-- 只有内存缓存：刷新页面、小程序冷启动后从服务端重拉，没发成功的消息会丢。`logout()` 清掉全部本地数据。
+- 只有内存缓存：刷新页面、小程序冷启动后从服务端重拉，没发成功的消息会丢；好友同样。`logout()` 清掉全部本地数据。
 - 录音、播放、选文件、转码、截封面由你自己做。
 - 没有群聊（服务端没有）。
 

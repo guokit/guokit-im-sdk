@@ -27,12 +27,12 @@ guokit IM 是可私有部署的即时通讯服务。三方角色：
 2. 存量用户 `POST /server/users/batch` 批量导入（每批 ≤100）；注册、改昵称头像时 `PUT /server/users/{user_id}`。user_id 用自家用户主键字符串，满足 `[A-Za-z0-9_-]{1,64}`。
 3. 用户登录时 `POST /server/users/{user_id}/token`，把 `token` 与 `expires_at` 交给客户端；客户端令牌失效时找后端换。
 4. 自家封号 → `PATCH /server/users/{user_id}` `{"status":0}`；退出全部设备 → `POST .../kick`；自家拉黑 → `PUT /server/users/{user_id}/blocks/{target}`。
-5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送；message_recalled 用来撤掉已发的推送、更新归档（可能比 after_send 先到，按 `message_id` 判断）。站点接了微信渠道、要让坐席认出微信用户是哪个会员的，再实现 `resolve_user`（同步，3 秒内回）。要在自家后台处理举报的，IM 设置打开「推送用户举报」收 `report`（异步）；不开也能在 IM 后台处置。
+5. 需要审核或离线推送时配回调：before_send 同步审核（2 秒内回），after_send 异步拿到后，`to_source` 为 `app`、`to_online` 为 false 且 `to_muted` 不为 true 时才走厂商推送；message_recalled 用来撤掉已发的推送、更新归档（可能比 after_send 先到，按 `message_id` 判断）。站点接了微信渠道、要让坐席认出微信用户是哪个会员的，再实现 `resolve_user`（同步，3 秒内回）。要在自家后台处理举报的，IM 设置打开「推送用户举报」收 `report`（异步）；不开也能在 IM 后台处置。你方已有好友关系、要同步进 IM 的，用 `PUT /server/users/{user_id}/friends/{target}` 与 `POST /server/friends/batch`，要知道用户在 App 里加删好友的，打开「推送好友变化」收 `friend_changed`（按 `via` 区分是不是你自己调的）。
 
 客户端：
 1. 拿到令牌后连 `wss://<IM 域名>/api/im/v1/connect/websocket`（Centrifuge 协议，不用本仓 SDK 时用官方 SDK：Flutter `centrifuge`、Web `centrifuge`）。
 2. 每次 connected（首连与重连）都做一次对账：拉会话列表，落后的会话按 `after_seq` 补拉。
-3. 推送从服务端订阅的 publication 事件收：`message` / `read` / `read_all` / `conversation_changed` / `message_recalled` / `peer_read` / `typing`，不认识的忽略。
+3. 推送从服务端订阅的 publication 事件收：`message` / `read` / `read_all` / `conversation_changed` / `message_recalled` / `peer_read` / `typing`，用了好友的还有 `friend_request` / `friend_changed` / `friend_groups_changed`，不认识的忽略。
 4. 发消息、标已读、上传全走 HTTP。
 
 详细写法：后端看 [references/server.md](references/server.md)，客户端看 [references/client.md](references/client.md)。

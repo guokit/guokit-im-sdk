@@ -61,6 +61,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `onTyping` | 对方「正在输入」的变化，`active` 为 false 时收起 |
 | `onConversationsChanged` / `onTotalUnreadChanged` | 会话快照（置顶在前，其余按最后消息时间倒序）/ 总未读（不计免打扰会话，登录后先推一次本地值） |
 | `onConnectionChanged` / `onKickedOut` | 连接状态 / 被封禁或踢下线 |
+| `onFriendRequest` / `onFriendsChanged` / `onFriendGroupsChanged` | 有人加我 / 好友快照（按 userId 升序）/ 分组变了，重拉 `friendGroups()` |
 | `conversations()` | 先返回本地快照，后台再对齐服务端 |
 | `messages(convId, {before, limit})` | 按 seq 升序；最新一页末尾会附上本设备还没发成功的消息 |
 | `conversationWith(peerId)` | 只查本地，见下方常见问题 |
@@ -70,13 +71,18 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `sendFile(to, 路径, {name}) / sendFileBytes(to, 字节, {name})` | 发文件，按路径发时边读边传，见下方常见问题 |
 | `sendVideo(to, 路径, {duration, width, height, coverBytes}) / sendVideoBytes(…)` | 发视频，mp4 或 mov，1 小时以内，封面可选，见下方常见问题 |
 | `recall(msg)` | 撤回自己发的消息，失败会抛，见下方常见问题 |
-| `features()` | 站点开关：`recallMinutes` 撤回时限（0 = 没开启）、`readReceipt` 是否显示对方已读、`fileMaxMb` / `videoMaxMb` 能发多大的文件与视频（0 = 不能发） |
+| `features()` | 站点开关：`recallMinutes` 撤回时限（0 = 没开启）、`readReceipt` 是否显示对方已读、`fileMaxMb` / `videoMaxMb` 能发多大的文件与视频（0 = 不能发）、`friendOnly` 是否只允许好友互发；另带本人的加好友方式 `addPolicy` |
 | `sendTyping(convId)` | 告诉对方自己正在输入，SDK 3 秒节流，失败静默 |
 | `resend(failed)` | 只能重发 `failed` 的消息，沿用原 `client_msg_id`，服务端幂等不会重复 |
 | `markRead(convId)` / `markAllRead()` | 标已读 / 一键清全部未读 |
 | `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
 | `clearConversation(convId)` / `deleteConversation(convId)` | 清空本人这一侧的记录 / 删除会话（同时清空），见下方常见问题 |
 | `block / unblock / blocks` | 黑名单 |
+| `friends()` / `friend(userId)` | 好友：同步返回内存快照（冷启动为空）并在后台全量拉一遍，调过之后每次连上都重拉；好友**不进本地库**。需服务端 ≥ v1.24.0，见接入文档 §5.17 |
+| `addFriend(target, {message})` | 加好友，返回 `status`（`friend` 直接成为好友 / `pending` 已发申请）与 `requestId`；被拉黑 `IM_BLOCKED`、对方不允许 `IM_FRIEND_ADD_DENIED`、每天 50 条超出 `IM_RATE_LIMITED` 会抛 |
+| `friendRequests({box})` / `acceptFriend(id)` / `rejectFriend(id)` | 收到（`in`）或发出（`out`）的申请 / 同意 / 拒绝（不通知对方） |
+| `deleteFriend(target)` / `setFriend(target, {remark, groupIds})` | 删除（单向，对方那边我还在）/ 改备注与分组；会话 `peer.remark` 跟着更新 |
+| `friendGroups()` / `createFriendGroup` / `updateFriendGroup` / `deleteFriendGroup` / `setFriendAddPolicy(0\|1\|2)` | 分组与加好友方式 |
 | `report(target, reason, {detail, messageIds, block})` | 举报用户：`reason` 取 `reportReasons` 之一，`messageIds` 是对方发的消息作证据（最多 10 条），`block: true` 同时拉黑；同一人有待处理的举报时返回原单（`duplicated` 为 true） |
 | `csState({serviceId})` / `handoffCs()` / `rateCs(sessionId, rating, {comment})` | 平台客服的接待状态（排队名次）/ 转人工 / 评价一次已结束的接待，见下方常见问题 |
 | `leaveCs({name, phone, email})` | 没有客服在线时留联系方式，返回留言单号，见下方常见问题 |
@@ -87,7 +93,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | 状态 | 情况 | 建议 |
 |---|---|---|
 | `sent` | 成功 | — |
-| `rejected` | `IM_BLOCKED`（对方拉黑了你）、`IM_MESSAGE_REJECTED`（审核拒绝） | 提示「被对方拒收」，不要重发 |
+| `rejected` | `IM_BLOCKED`（对方拉黑了你）、`IM_MESSAGE_REJECTED`（审核拒绝）、`IM_NOT_FRIEND`（站点只允许好友互发） | 提示「被对方拒收」或「加好友后才能聊天」，不要重发 |
 | `failed` | `NETWORK`、`IM_RATE_LIMITED`、服务端 5xx | 允许用户点「重发」 |
 | `failed` | `IM_USER_NOT_FOUND`、`IM_USER_DISABLED`、`VALIDATION` | 按错误码提示，例如「对方还不能接收私信」 |
 | `failed` | `IMAGE_DECODE`、`FILE_READ`、`IMAGE_MISSING`、`VOICE_MISSING`、`FILE_MISSING`、`VIDEO_MISSING`、`KICKED_OUT`、`UNKNOWN` | SDK 自己的错误码，见 `lib/src/sender.dart` 文件头 |
