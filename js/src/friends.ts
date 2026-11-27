@@ -67,10 +67,13 @@ export class FriendBook {
     }))
   }
 
-  /** friend_changed 推送，或本设备写接口的结果。 */
-  apply(action: string, raw: Raw | ImFriend): void {
-    if (this.closed) return
+  /** friend_changed 推送，或本设备写接口的结果。进同一队列：落在对账翻页期间的不会被对账结果盖掉。 */
+  apply(action: string, raw: Raw | ImFriend): Promise<void> {
     const f = 'user_id' in raw ? friendFromServer(raw) : (raw as ImFriend)
+    return this.enqueue(async () => this.applyNow(action, f))
+  }
+
+  private applyNow(action: string, f: ImFriend): void {
     if (!f.userId) return
     let remark = f.remark
     if (action === 'removed') {

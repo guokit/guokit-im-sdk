@@ -417,7 +417,7 @@ export class GuokitIm {
     const s = this.session()
     return this.run(s, async () => {
       const f = await s.api.acceptFriend(requestId)
-      s.friends.apply('added', f)
+      await s.friends.apply('added', f)
       return f
     })
   }
@@ -434,7 +434,7 @@ export class GuokitIm {
     await this.run(s, async () => {
       await s.api.deleteFriend(target)
       const f = s.friends.get(target)
-      s.friends.apply('removed', f ?? { userId: target, nickname: '', avatarUrl: '', remark: '', groupIds: [], mutual: false, createdAt: 0 })
+      await s.friends.apply('removed', f ?? { userId: target, nickname: '', avatarUrl: '', remark: '', groupIds: [], mutual: false, createdAt: 0 })
     })
   }
 
@@ -443,7 +443,7 @@ export class GuokitIm {
     const s = this.session()
     return this.run(s, async () => {
       const f = await s.api.setFriend(target, { remark: patch.remark, group_ids: patch.groupIds })
-      s.friends.apply('updated', f)
+      await s.friends.apply('updated', f)
       return f
     })
   }
@@ -479,7 +479,7 @@ export class GuokitIm {
   private onFriendPush(s: Session, ev: Record<string, any>): void {
     if (this.s !== s) return
     if (ev.event === 'friend_request' && ev.request) this.emit(s, 'friendRequest', friendRequestFromServer(ev.request))
-    else if (ev.event === 'friend_changed' && ev.friend) s.friends.apply(ev.action, ev.friend)
+    else if (ev.event === 'friend_changed' && ev.friend) void s.friends.apply(ev.action, ev.friend)
     else if (ev.event === 'friend_groups_changed') this.emit(s, 'friendGroupsChanged', undefined)
   }
 

@@ -78,7 +78,7 @@ await im.logout();                       // 退出账号时调用；clearCache: 
 | `setPinned(convId, bool)` / `setMuted(convId, bool)` | 置顶（最多 50 个）/ 免打扰（不计入总未读），多端同步 |
 | `clearConversation(convId)` / `deleteConversation(convId)` | 清空本人这一侧的记录 / 删除会话（同时清空），见下方常见问题 |
 | `block / unblock / blocks` | 黑名单 |
-| `friends()` / `friend(userId)` | 好友：同步返回内存快照（冷启动为空）并在后台全量拉一遍，调过之后每次连上都重拉；好友**不进本地库**。需服务端 ≥ v1.24.0，见接入文档 §5.17 |
+| `friends()` / `friend(userId)` | 好友：同步返回内存快照（冷启动为空）并在后台全量拉一遍，调过之后每次连上都重拉；好友**不进本地库**。每调一次就全量对账一次，别在 `build` 里调，进页面调一次、之后听 `onFriendsChanged`。需服务端 ≥ v1.24.0，见接入文档 §5.17 |
 | `addFriend(target, {message})` | 加好友，返回 `status`（`friend` 直接成为好友 / `pending` 已发申请）与 `requestId`；被拉黑 `IM_BLOCKED`、对方不允许 `IM_FRIEND_ADD_DENIED`、每天 50 条超出 `IM_RATE_LIMITED` 会抛 |
 | `friendRequests({box})` / `acceptFriend(id)` / `rejectFriend(id)` | 收到（`in`）或发出（`out`）的申请 / 同意 / 拒绝（不通知对方） |
 | `deleteFriend(target)` / `setFriend(target, {remark, groupIds})` | 删除（单向，对方那边我还在）/ 改备注与分组；会话 `peer.remark` 跟着更新 |

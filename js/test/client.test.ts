@@ -221,7 +221,7 @@ test('好友：调过 friends() 才对账、回写会话备注；friend_changed 
   expect(friendCalls).toBe(1)
   expect(im.friend('u2')?.remark).toBe('老乙')
   expect(im.conversations()[0].peer?.remark).toBe('老乙')
-  expect(friendsSeen.at(-1).map((f: any) => f.userId)).toEqual(['u2'])
+  expect(friendsSeen[friendsSeen.length - 1].map((f: any) => f.userId)).toEqual(['u2'])
 
   rts[0].hooks.onPublication({ event: 'friend_changed', action: 'removed', friend: { user_id: 'u2' } })
   await flush()

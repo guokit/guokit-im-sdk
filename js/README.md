@@ -84,7 +84,7 @@ await im.sendVideo(to, file, { durationMs, width, height, cover })        // H.2
 
 ### 好友
 
-需要服务端 ≥ v1.24.0（接入文档 §5.17）。好友只缓存在内存：`im.friends()` 同步返回快照（冷启动为空）并在后台全量拉一遍，调过之后每次连上都重拉（3000 人最多 6 个请求）；变化走 `friendsChanged`。
+需要服务端 ≥ v1.24.0（接入文档 §5.17）。好友只缓存在内存：`im.friends()` 同步返回快照（冷启动为空）并在后台全量拉一遍，调过之后每次连上都重拉（3000 人最多 6 个请求）；变化走 `friendsChanged`。**每调一次就全量对账一次，别在 render 里调**，进页面调一次、之后听事件。
 
 ```ts
 const r = await im.addFriend('u1002', '我是张三')     // { status: 'friend' | 'pending', requestId }
